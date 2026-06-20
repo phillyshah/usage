@@ -1,0 +1,15 @@
+services:
+  labels-api:
+    build: .
+    env_file: .env
+    networks: [traefik]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.labels.rule=Host(`usage.90ten.life`)"
+      - "traefik.http.routers.labels.entrypoints=websecure"
+      - "traefik.http.routers.labels.tls.certresolver=letsencrypt"
+      - "traefik.http.services.labels.loadbalancer.server.port=8000"
+    restart: unless-stopped
+networks:
+  traefik:
+    external: true

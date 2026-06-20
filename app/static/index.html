@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Usage — Turn ticket photos into a clean spreadsheet</title>
+  <meta name="description" content="Usage turns ticket photos into a clean, reviewable spreadsheet." />
+  <link rel="stylesheet" href="/css/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23107a8b'/%3E%3Cpath d='M9 17l4 4 10-10' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <!-- Skip link for keyboard users -->
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <!-- ===================== HEADER ===================== -->
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="32" height="32">
+            <rect width="32" height="32" rx="8" fill="currentColor" />
+            <path d="M9 17l4 4 10-10" stroke="#fff" stroke-width="3" fill="none"
+                  stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+        <div class="brand-text">
+          <h1 class="brand-name">Usage</h1>
+          <p class="brand-tagline">Turn ticket photos into a clean spreadsheet.</p>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <span id="health-dot" class="health-dot is-unknown" aria-hidden="true"></span>
+        <span id="health-label" class="health-label">Checking connection…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===================== HELP PANEL ===================== -->
+  <section class="container help-wrap">
+    <details class="help-panel" id="help-panel">
+      <summary class="help-summary">
+        <span class="help-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.5 9a2.5 2.5 0 015 0c0 1.5-2.5 2-2.5 3.5" />
+            <line x1="12" y1="17" x2="12" y2="17" />
+          </svg>
+        </span>
+        <span>How this works</span>
+        <span class="help-chevron" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
+        </span>
+      </summary>
+      <div class="help-body">
+        <p>Follow the four steps below, top to bottom. You don't need any technical
+           knowledge — each step tells you exactly what to do.</p>
+        <ol class="help-steps">
+          <li><strong>Upload today's tickets.</strong> Add the photos you took of today's tickets.</li>
+          <li><strong>Extract the data.</strong> Press one button and let the tool read the labels for you.</li>
+          <li><strong>Review the spreadsheet.</strong> Download it, fix any colored cells, and save.</li>
+          <li><strong>Send back your corrections.</strong> Upload your saved spreadsheet so the tool can learn.</li>
+        </ol>
+      </div>
+    </details>
+  </section>
+
+  <!-- ===================== MAIN ===================== -->
+  <main id="main" class="container main-grid">
+
+    <!-- ---------- STEP 1: Upload tickets ---------- -->
+    <section class="card step-card" aria-labelledby="step1-title">
+      <div class="step-head">
+        <span class="step-number" aria-hidden="true">1</span>
+        <div>
+          <h2 class="step-title" id="step1-title">Upload today's tickets</h2>
+          <p class="step-help">Add the photos of today's tickets. You can drag them in or click to browse — JPEG or PNG, as many as you like.</p>
+        </div>
+      </div>
+
+      <form id="upload-form" class="step-body">
+        <label class="dropzone" id="upload-dropzone" for="upload-input" tabindex="0"
+               role="button" aria-describedby="upload-hint">
+          <span class="dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="7 9 12 4 17 9" />
+              <line x1="12" y1="4" x2="12" y2="16" />
+            </svg>
+          </span>
+          <span class="dropzone-title">Drag photos here</span>
+          <span class="dropzone-sub" id="upload-hint">or <span class="link-like">click to choose files</span></span>
+          <input id="upload-input" class="visually-hidden" type="file"
+                 accept="image/jpeg,image/png" multiple />
+        </label>
+
+        <ul class="file-list" id="upload-file-list" aria-live="polite"></ul>
+
+        <div class="step-actions">
+          <button type="submit" id="upload-submit" class="btn btn-primary" disabled>
+            Upload tickets
+          </button>
+          <button type="button" id="upload-clear" class="btn btn-ghost" hidden>Clear list</button>
+        </div>
+      </form>
+
+      <!-- Result: received tickets -->
+      <div id="upload-result" class="result-area" hidden></div>
+    </section>
+
+    <!-- ---------- STEP 2: Process the batch ---------- -->
+    <section class="card step-card" aria-labelledby="step2-title">
+      <div class="step-head">
+        <span class="step-number" aria-hidden="true">2</span>
+        <div>
+          <h2 class="step-title" id="step2-title">Extract the data</h2>
+          <p class="step-help">Press the button and the tool will read the device info from every ticket. This can take a minute — that's normal.</p>
+        </div>
+      </div>
+
+      <div class="step-body">
+        <button type="button" id="run-btn" class="btn btn-primary btn-lg">
+          <span class="btn-label">Extract data</span>
+        </button>
+
+        <div id="run-progress" class="working" hidden>
+          <span class="spinner" aria-hidden="true"></span>
+          <div>
+            <p class="working-title">Reading your tickets…</p>
+            <p class="working-sub">Please leave this page open. This usually takes under a minute.</p>
+          </div>
+        </div>
+
+        <div id="run-result" class="result-area" hidden></div>
+      </div>
+    </section>
+
+    <!-- ---------- STEP 3: Review the spreadsheet ---------- -->
+    <section class="card step-card" aria-labelledby="step3-title">
+      <div class="step-head">
+        <span class="step-number" aria-hidden="true">3</span>
+        <div>
+          <h2 class="step-title" id="step3-title">Review the spreadsheet</h2>
+          <p class="step-help">Download the spreadsheet, open it, fix any colored cells, then save it. The colors tell you exactly what needs attention.</p>
+        </div>
+      </div>
+
+      <div class="step-body">
+        <a id="download-sheet" class="btn btn-primary" href="#" hidden download>
+          <span class="btn-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+          </span>
+          Download review spreadsheet
+        </a>
+        <p id="download-empty" class="muted-note">The download will appear here right after you finish step 2.</p>
+
+        <div class="legend" role="group" aria-label="Cell color guide">
+          <p class="legend-title">What the colors mean</p>
+          <ul class="legend-list">
+            <li class="legend-item">
+              <span class="swatch swatch-white" aria-hidden="true"></span>
+              <span class="legend-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"/></svg>
+              </span>
+              <span class="legend-text"><strong>White</strong> — confident. Nothing to do.</span>
+            </li>
+            <li class="legend-item">
+              <span class="swatch swatch-amber" aria-hidden="true"></span>
+              <span class="legend-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+              </span>
+              <span class="legend-text"><strong>Amber</strong> — double-check this guess.</span>
+            </li>
+            <li class="legend-item">
+              <span class="swatch swatch-red" aria-hidden="true"></span>
+              <span class="legend-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+              </span>
+              <span class="legend-text"><strong>Red</strong> — blank. Please fill this in.</span>
+            </li>
+          </ul>
+          <p class="legend-foot">When you're done, save the file and move on to step 4.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- STEP 4: Send back corrections ---------- -->
+    <section class="card step-card" aria-labelledby="step4-title">
+      <div class="step-head">
+        <span class="step-number" aria-hidden="true">4</span>
+        <div>
+          <h2 class="step-title" id="step4-title">Send back your corrections</h2>
+          <p class="step-help">Upload your saved spreadsheet (or several). The tool uses your fixes to get smarter over time.</p>
+        </div>
+      </div>
+
+      <form id="corrections-form" class="step-body">
+        <label class="dropzone" id="corrections-dropzone" for="corrections-input" tabindex="0"
+               role="button" aria-describedby="corrections-hint">
+          <span class="dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="9" y1="14" x2="15" y2="14" />
+              <line x1="9" y1="17" x2="13" y2="17" />
+            </svg>
+          </span>
+          <span class="dropzone-title">Drag your saved spreadsheet here</span>
+          <span class="dropzone-sub" id="corrections-hint">or <span class="link-like">click to choose .xlsx files</span></span>
+          <input id="corrections-input" class="visually-hidden" type="file"
+                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple />
+        </label>
+
+        <ul class="file-list" id="corrections-file-list" aria-live="polite"></ul>
+
+        <div class="step-actions">
+          <button type="submit" id="corrections-submit" class="btn btn-primary" disabled>
+            Send corrections
+          </button>
+          <button type="button" id="corrections-clear" class="btn btn-ghost" hidden>Clear list</button>
+        </div>
+      </form>
+
+      <div id="corrections-result" class="result-area" hidden></div>
+    </section>
+
+    <!-- ===================== SECONDARY ===================== -->
+    <div class="secondary-grid">
+
+      <!-- Reference log -->
+      <section class="card secondary-card" aria-labelledby="ref-title">
+        <h2 class="secondary-title" id="ref-title">Update the reference log</h2>
+        <p class="step-help">Optional. Upload the latest Expiry Log spreadsheet so the tool has the newest device information.</p>
+
+        <form id="reference-form" class="step-body">
+          <label class="dropzone dropzone-sm" id="reference-dropzone" for="reference-input" tabindex="0"
+                 role="button" aria-describedby="reference-hint">
+            <span class="dropzone-title">Drag the Expiry Log here</span>
+            <span class="dropzone-sub" id="reference-hint">or <span class="link-like">choose one .xlsx file</span></span>
+            <input id="reference-input" class="visually-hidden" type="file"
+                   accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+          </label>
+
+          <ul class="file-list" id="reference-file-list" aria-live="polite"></ul>
+
+          <div class="step-actions">
+            <button type="submit" id="reference-submit" class="btn btn-secondary" disabled>Update log</button>
+          </div>
+        </form>
+
+        <div id="reference-result" class="result-area" hidden></div>
+      </section>
+
+      <!-- Past batches -->
+      <section class="card secondary-card" aria-labelledby="batches-title">
+        <div class="secondary-head">
+          <h2 class="secondary-title" id="batches-title">Past batches</h2>
+          <button type="button" id="batches-refresh" class="btn btn-ghost btn-sm">Refresh</button>
+        </div>
+        <p class="step-help">Spreadsheets you've created before. Click to download one again.</p>
+        <div id="batches-list" class="batches" aria-live="polite"></div>
+      </section>
+
+      <!-- Metrics -->
+      <section class="card secondary-card secondary-wide" aria-labelledby="metrics-title">
+        <h2 class="secondary-title" id="metrics-title">Getting better over time</h2>
+        <p class="step-help">The share of labels the tool reads confidently each week. The more corrections you send, the higher this climbs.</p>
+        <div id="metrics-chart" class="metrics" aria-live="polite"></div>
+      </section>
+
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>Usage — internal distributor label tool. Need help? Reach out to your team lead.</p>
+    </div>
+  </footer>
+
+  <!-- Toast region -->
+  <div id="toast-region" class="toast-region" role="region" aria-live="assertive" aria-label="Notifications"></div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>
