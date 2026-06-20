@@ -91,7 +91,7 @@ class _LocalBackend:
             self._write(table, rows)
             return row
 
-    def replace_all(self, table: str, rows: list[dict]) -> None:
+    def replace_all(self, table: str, rows: list[dict], key_col: str = "id") -> None:
         with self._lock:
             self._write(table, list(rows))
 
@@ -136,9 +136,12 @@ class _SupabaseBackend:
         res = self.client.table(table).insert(row).execute()
         return (res.data or [row])[0]
 
-    def replace_all(self, table: str, rows: list[dict]) -> None:
-        # Full replace: clear then insert in chunks.
-        self.client.table(table).delete().neq("id", 0).execute()
+    def replace_all(self, table: str, rows: list[dict], key_col: str = "id") -> None:
+        # Full replace: delete every row, then insert in chunks. PostgREST
+        # requires a filter on delete; "<pk> is not null" matches all rows and
+        # works whether the pk is a serial id (reference_lots) or text
+        # (reference_parts.part_no).
+        self.client.table(table).delete().not_.is_(key_col, "null").execute()
         for i in range(0, len(rows), 500):
             self.client.table(table).insert(rows[i : i + 500]).execute()
 
@@ -167,14 +170,17 @@ class Database:
 
     # ---- reference data (full replace on each Expiry Log ingest) ----
     def replace_reference(self, lots: list[dict], parts: list[dict]) -> None:
-        # add ids for local backend parity
         for i, r in enumerate(lots, start=1):
-            r.setdefault("id", i)
+            # Only the local backend needs a synthetic id; Supabase uses its
+            # bigserial so the sequence stays consistent.
+            if self.offline:
+                r.setdefault("id", i)
             r.setdefault("ingested_at", _now_iso())
         for p in parts:
             p.setdefault("last_seen", _now_iso())
-        self.backend.replace_all("reference_lots", lots)
-        self.backend.replace_all("reference_parts", parts)
+        # reference_lots keys on the serial id; reference_parts keys on part_no.
+        self.backend.replace_all("reference_lots", lots, key_col="id")
+        self.backend.replace_all("reference_parts", parts, key_col="part_no")
 
     def log_ingest(self, row: dict) -> dict:
         row.setdefault("id", new_id())
