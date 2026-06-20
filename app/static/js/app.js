@@ -1,0 +1,576 @@
+/*
+ * app.js — UI logic for Usage.
+ *
+ * Wires the four-step guided flow plus the secondary sections. Plain
+ * vanilla JS, ES modules, no framework. All server calls go through api.js
+ * and surface friendly errors via toasts and inline notices.
+ */
+import { api, ApiError } from "./api.js";
+
+/* ------------------------------------------------------------------ utils */
+const $ = (sel, root = document) => root.querySelector(sel);
+
+function el(tag, opts = {}, children = []) {
+  const node = document.createElement(tag);
+  if (opts.class) node.className = opts.class;
+  if (opts.text != null) node.textContent = opts.text;
+  if (opts.html != null) node.innerHTML = opts.html;
+  if (opts.attrs) for (const [k, v] of Object.entries(opts.attrs)) node.setAttribute(k, v);
+  for (const c of [].concat(children)) if (c) node.append(c);
+  return node;
+}
+
+function fmtBytes(n) {
+  if (!n && n !== 0) return "";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0, v = n;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
+function pluralize(n, one, many) { return `${n} ${n === 1 ? one : (many || one + "s")}`; }
+
+/* SVG icon snippets reused in notices/toasts. */
+const ICONS = {
+  check: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="8 12 11 15 16 9"/></svg>`,
+  warn: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12" y2="17"/></svg>`,
+  error: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>`,
+  info: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12" y2="8"/></svg>`,
+};
+
+/* --------------------------------------------------------------- toasts */
+const toastRegion = $("#toast-region");
+
+function toast(kind, title, text = "", { timeout = 6000 } = {}) {
+  const icon = kind === "success" ? ICONS.check : kind === "error" ? ICONS.error : ICONS.info;
+  const node = el("div", { class: `toast is-${kind}`, attrs: { role: "status" } });
+  node.append(
+    el("span", { class: "toast-icon", html: icon, attrs: { "aria-hidden": "true" } }),
+    el("div", { class: "toast-body" }, [
+      el("div", { class: "toast-title", text: title }),
+      text ? el("div", { class: "toast-text", text }) : null,
+    ]),
+  );
+  const close = el("button", { class: "toast-close", text: "×", attrs: { "aria-label": "Dismiss notification", type: "button" } });
+  const remove = () => { node.remove(); };
+  close.addEventListener("click", remove);
+  node.append(close);
+  toastRegion.append(node);
+  if (timeout) setTimeout(remove, timeout);
+}
+
+/* ------------------------------------------------------------- notices */
+/**
+ * Render a friendly inline notice into a result container.
+ * For errors we add a collapsible "Show technical detail" area.
+ */
+function renderNotice(container, kind, title, bodyNodes = [], detail = "") {
+  container.hidden = false;
+  container.replaceChildren();
+  const icon = kind === "success" ? ICONS.check : kind === "warn" ? ICONS.warn
+    : kind === "error" ? ICONS.error : ICONS.info;
+  const body = el("div", { class: "notice-body" }, [
+    el("div", { class: "notice-title", text: title }),
+  ]);
+  for (const n of [].concat(bodyNodes)) if (n) body.append(n);
+
+  if (detail) {
+    const pre = el("pre", { class: "detail-pre", text: detail });
+    pre.hidden = true;
+    const toggle = el("button", {
+      class: "detail-toggle", text: "Show technical detail",
+      attrs: { type: "button", "aria-expanded": "false" },
+    });
+    toggle.addEventListener("click", () => {
+      const open = pre.hidden;
+      pre.hidden = !open;
+      toggle.textContent = open ? "Hide technical detail" : "Show technical detail";
+      toggle.setAttribute("aria-expanded", String(open));
+    });
+    body.append(toggle, pre);
+  }
+
+  const notice = el("div", { class: `notice is-${kind}` }, [
+    el("span", { class: "notice-icon", html: icon, attrs: { "aria-hidden": "true" } }),
+    body,
+  ]);
+  container.append(notice);
+}
+
+function errorDetail(err) {
+  if (err instanceof ApiError) return err.detail || `Status ${err.status}`;
+  return String(err && err.message ? err.message : err);
+}
+
+/* --------------------------------------------------- file picker module */
+/**
+ * Wires a dropzone + hidden input + file list into a reusable picker.
+ * Tracks selected File objects, renders removable rows (with thumbnails
+ * for images), and toggles the submit/clear buttons. Returns helpers.
+ */
+function createPicker({ dropzone, input, listEl, submitBtn, clearBtn, multiple = true, accept = () => true }) {
+  let files = [];
+
+  function accepted(file) { return accept(file); }
+
+  function setFiles(next) {
+    files = multiple ? next : next.slice(0, 1);
+    render();
+  }
+
+  function addFiles(fileLike) {
+    const incoming = Array.from(fileLike).filter(accepted);
+    if (incoming.length === 0) return;
+    setFiles(multiple ? files.concat(incoming) : incoming);
+  }
+
+  function removeAt(i) { files.splice(i, 1); render(); }
+
+  function clear() { files = []; render(); }
+
+  function render() {
+    listEl.replaceChildren();
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const row = el("li", { class: "file-row" });
+
+      if (f.type && f.type.startsWith("image/")) {
+        const img = el("img", { class: "file-thumb", attrs: { alt: "", "aria-hidden": "true" } });
+        const url = URL.createObjectURL(f);
+        img.src = url;
+        img.addEventListener("load", () => URL.revokeObjectURL(url), { once: true });
+        row.append(img);
+      }
+
+      row.append(el("div", { class: "file-meta" }, [
+        el("div", { class: "file-name", text: f.name }),
+        el("div", { class: "file-size", text: fmtBytes(f.size) }),
+      ]));
+
+      const rm = el("button", {
+        class: "file-remove", text: "×",
+        attrs: { type: "button", "aria-label": `Remove ${f.name}` },
+      });
+      rm.addEventListener("click", () => removeAt(i));
+      row.append(rm);
+      listEl.append(row);
+    }
+
+    const has = files.length > 0;
+    if (submitBtn) submitBtn.disabled = !has;
+    if (clearBtn) clearBtn.hidden = !has;
+  }
+
+  // Click / keyboard on dropzone opens picker
+  dropzone.addEventListener("click", (e) => {
+    // The label's native behavior opens the input; avoid double-trigger.
+    if (e.target === input) return;
+  });
+  dropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
+  });
+
+  input.addEventListener("change", () => {
+    addFiles(input.files);
+    input.value = ""; // allow re-selecting the same file
+  });
+
+  // Drag & drop
+  ["dragenter", "dragover"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.add("is-dragover"); }));
+  ["dragleave", "dragend", "drop"].forEach((evt) =>
+    dropzone.addEventListener(evt, (e) => { e.preventDefault(); dropzone.classList.remove("is-dragover"); }));
+  dropzone.addEventListener("drop", (e) => {
+    if (e.dataTransfer && e.dataTransfer.files) addFiles(e.dataTransfer.files);
+  });
+
+  if (clearBtn) clearBtn.addEventListener("click", clear);
+
+  return {
+    get files() { return files.slice(); },
+    clear,
+    hasFiles: () => files.length > 0,
+  };
+}
+
+/* Accept helpers */
+const isImage = (f) => /image\/(jpeg|png)/.test(f.type) || /\.(jpe?g|png)$/i.test(f.name);
+const isXlsx = (f) => /\.xlsx$/i.test(f.name) || f.type.includes("spreadsheetml");
+
+/* ----------------------------------------------------------- app state */
+const state = { lastBatchId: null };
+
+/* ===================================================================== *
+ *  STEP 1 — Upload tickets
+ * ===================================================================== */
+const uploadResult = $("#upload-result");
+const uploadPicker = createPicker({
+  dropzone: $("#upload-dropzone"),
+  input: $("#upload-input"),
+  listEl: $("#upload-file-list"),
+  submitBtn: $("#upload-submit"),
+  clearBtn: $("#upload-clear"),
+  multiple: true,
+  accept: isImage,
+});
+
+$("#upload-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!uploadPicker.hasFiles()) return;
+  const btn = $("#upload-submit");
+  const files = uploadPicker.files;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Uploading…";
+  try {
+    const data = await api.uploadImages(files);
+    renderUploadResult(data);
+    toast("success", "Tickets received", `${pluralize(files.length, "photo")} uploaded.`);
+    uploadPicker.clear();
+  } catch (err) {
+    renderNotice(uploadResult, "error", "We couldn't upload your tickets",
+      [el("p", { class: "notice-text", text: "Please check the files are photos (JPEG or PNG) and try again." })],
+      errorDetail(err));
+    toast("error", "Upload failed", "Please try again.");
+    btn.disabled = false;
+  } finally {
+    btn.textContent = original;
+  }
+});
+
+function renderUploadResult(data) {
+  const tickets = Array.isArray(data && data.tickets) ? data.tickets : [];
+  if (data && data.batch_id) state.lastBatchId = data.batch_id;
+
+  const manual = tickets.filter((t) => t.status === "manual_queue");
+  const body = [];
+  body.push(el("p", { class: "notice-text",
+    text: `${pluralize(tickets.length, "ticket")} received and ready for step 2.` }));
+
+  const list = el("ul", { class: "ticket-list" });
+  for (const t of tickets) {
+    const isManual = t.status === "manual_queue";
+    list.append(el("li", { class: "ticket-row" }, [
+      el("span", { class: "ticket-id", text: t.ticket_id || "Ticket" }),
+      el("span", {
+        class: `tag ${isManual ? "tag-manual" : "tag-review"}`,
+        text: isManual ? "Needs a person" : "Ready to review",
+      }),
+    ]));
+  }
+  body.push(list);
+
+  if (manual.length > 0) {
+    body.push(el("p", { class: "notice-text", html:
+      `<strong>${pluralize(manual.length, "ticket")}</strong> couldn't be cleared of patient information automatically, so ${manual.length === 1 ? "it has" : "they have"} been set aside for a person to handle. Nothing is lost — just let your team lead know.` }));
+  }
+
+  renderNotice(uploadResult, tickets.length ? "success" : "info",
+    tickets.length ? "Tickets received" : "No tickets were read", body);
+}
+
+/* ===================================================================== *
+ *  STEP 2 — Extract data (run batch)
+ * ===================================================================== */
+const runBtn = $("#run-btn");
+const runProgress = $("#run-progress");
+const runResult = $("#run-result");
+
+runBtn.addEventListener("click", async () => {
+  runBtn.disabled = true;
+  runProgress.hidden = false;
+  runResult.hidden = true;
+  try {
+    const data = await api.runBatch(state.lastBatchId || undefined);
+    runProgress.hidden = true;
+    if (data && data.batch_id) state.lastBatchId = data.batch_id;
+    renderRunResult(data);
+    showDownload(data && data.batch_id);
+    toast("success", "Data extracted", "Your review spreadsheet is ready in step 3.");
+    loadBatches(); // refresh the history list
+  } catch (err) {
+    runProgress.hidden = true;
+    renderNotice(runResult, "error", "We couldn't process the batch",
+      [el("p", { class: "notice-text", text: "Please wait a moment and try again. If it keeps happening, tell your team lead." })],
+      errorDetail(err));
+    toast("error", "Processing failed", "Please try again.");
+  } finally {
+    runBtn.disabled = false;
+  }
+});
+
+function renderRunResult(data) {
+  const count = data && typeof data.ticket_count === "number" ? data.ticket_count : null;
+  const body = [el("p", { class: "notice-text",
+    text: count != null
+      ? `Done. ${pluralize(count, "ticket")} processed. Head to step 3 to download and review.`
+      : "Done. Head to step 3 to download and review." })];
+  renderNotice(runResult, "success", "Your spreadsheet is ready", body);
+}
+
+/* ===================================================================== *
+ *  STEP 3 — Download review spreadsheet
+ * ===================================================================== */
+const downloadLink = $("#download-sheet");
+const downloadEmpty = $("#download-empty");
+
+function showDownload(batchId) {
+  if (!batchId) return;
+  downloadLink.href = api.sheetUrl(batchId);
+  downloadLink.hidden = false;
+  downloadEmpty.hidden = true;
+}
+
+/* ===================================================================== *
+ *  STEP 4 — Send back corrections
+ * ===================================================================== */
+const correctionsResult = $("#corrections-result");
+const correctionsPicker = createPicker({
+  dropzone: $("#corrections-dropzone"),
+  input: $("#corrections-input"),
+  listEl: $("#corrections-file-list"),
+  submitBtn: $("#corrections-submit"),
+  clearBtn: $("#corrections-clear"),
+  multiple: true,
+  accept: isXlsx,
+});
+
+$("#corrections-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!correctionsPicker.hasFiles()) return;
+  const btn = $("#corrections-submit");
+  const files = correctionsPicker.files;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Sending…";
+  try {
+    const data = await api.uploadCorrections(files);
+    renderCorrectionsResult(data);
+    toast("success", "Corrections received", "Thanks — the tool just got a little smarter.");
+    correctionsPicker.clear();
+    loadMetrics();
+  } catch (err) {
+    renderNotice(correctionsResult, "error", "We couldn't read your corrections",
+      [el("p", { class: "notice-text", text: "Make sure you're uploading the saved spreadsheet (.xlsx) and try again." })],
+      errorDetail(err));
+    toast("error", "Upload failed", "Please try again.");
+    btn.disabled = false;
+  } finally {
+    btn.textContent = original;
+  }
+});
+
+function renderCorrectionsResult(data) {
+  const processed = num(data, "processed");
+  const matched = num(data, "tickets_matched");
+  const unknown = num(data, "tickets_unknown");
+
+  const grid = el("div", { class: "stat-grid" }, [
+    stat(processed, "files processed"),
+    stat(matched, "tickets matched"),
+    stat(unknown, "unknown tickets"),
+  ]);
+  const body = [grid];
+
+  if (unknown > 0) {
+    body.push(el("p", { class: "notice-text", html:
+      `An <strong>unknown ticket</strong> just means a row in your spreadsheet didn't line up with a ticket the tool knows about — usually a typo in the ticket number or a row that was added by hand. It's safe to ignore, or double-check those rows.` }));
+  }
+
+  renderNotice(correctionsResult, unknown > 0 ? "warn" : "success",
+    "Corrections received", body);
+}
+
+function num(obj, key) { return obj && typeof obj[key] === "number" ? obj[key] : 0; }
+function stat(n, label) {
+  return el("div", { class: "stat" }, [
+    el("div", { class: "stat-num", text: String(n) }),
+    el("div", { class: "stat-label", text: label }),
+  ]);
+}
+
+/* ===================================================================== *
+ *  SECONDARY — Reference log
+ * ===================================================================== */
+const referenceResult = $("#reference-result");
+const referencePicker = createPicker({
+  dropzone: $("#reference-dropzone"),
+  input: $("#reference-input"),
+  listEl: $("#reference-file-list"),
+  submitBtn: $("#reference-submit"),
+  clearBtn: null,
+  multiple: false,
+  accept: isXlsx,
+});
+
+$("#reference-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!referencePicker.hasFiles()) return;
+  const btn = $("#reference-submit");
+  const file = referencePicker.files[0];
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Updating…";
+  try {
+    const data = await api.uploadReferenceLog(file);
+    const grid = el("div", { class: "stat-grid" }, [
+      stat(num(data, "row_count"), "rows"),
+      stat(num(data, "unique_parts"), "unique parts"),
+      stat(num(data, "unique_lots"), "unique lots"),
+    ]);
+    renderNotice(referenceResult, "success", "Reference log updated", [grid]);
+    toast("success", "Reference log updated", "The tool now has your latest device info.");
+    referencePicker.clear();
+  } catch (err) {
+    renderNotice(referenceResult, "error", "We couldn't update the reference log",
+      [el("p", { class: "notice-text", text: "Please upload the Expiry Log as a single .xlsx file and try again." })],
+      errorDetail(err));
+    toast("error", "Update failed", "Please try again.");
+    btn.disabled = false;
+  } finally {
+    btn.textContent = original;
+  }
+});
+
+/* ===================================================================== *
+ *  SECONDARY — Past batches
+ * ===================================================================== */
+const batchesList = $("#batches-list");
+
+async function loadBatches() {
+  batchesList.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
+  try {
+    const batches = await api.listBatches();
+    renderBatches(Array.isArray(batches) ? batches : []);
+  } catch (err) {
+    batchesList.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "Couldn't load past batches" }),
+        el("span", { text: "Press Refresh to try again." }),
+      ]));
+  }
+}
+
+function renderBatches(batches) {
+  if (batches.length === 0) {
+    batchesList.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "No batches yet" }),
+        el("span", { text: "Once you finish step 2, your spreadsheets will appear here." }),
+      ]));
+    return;
+  }
+  // newest first if run_date is comparable
+  const sorted = batches.slice().sort((a, b) =>
+    String(b.run_date || "").localeCompare(String(a.run_date || "")));
+  batchesList.replaceChildren(...sorted.map((b) => {
+    const row = el("div", { class: "batch-row" }, [
+      el("div", { class: "batch-meta" }, [
+        el("div", { class: "batch-date", text: friendlyDate(b.run_date) || "Batch" }),
+        el("div", { class: "batch-sub", text:
+          `${pluralize(num(b, "ticket_count"), "ticket")}${b.status ? " · " + humanStatus(b.status) : ""}` }),
+      ]),
+    ]);
+    const link = el("a", {
+      class: "btn btn-secondary btn-sm",
+      text: "Download",
+      attrs: { href: api.sheetUrl(b.batch_id), download: "" },
+    });
+    row.append(link);
+    return row;
+  }));
+}
+
+function friendlyDate(raw) {
+  if (!raw) return "";
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return String(raw);
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+function humanStatus(s) {
+  return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+$("#batches-refresh").addEventListener("click", loadBatches);
+
+/* ===================================================================== *
+ *  SECONDARY — Auto-resolve metric
+ * ===================================================================== */
+const metricsChart = $("#metrics-chart");
+
+async function loadMetrics() {
+  metricsChart.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
+  try {
+    const data = await api.autoResolveMetrics(8);
+    renderMetrics(Array.isArray(data) ? data : []);
+  } catch (err) {
+    metricsChart.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "Couldn't load this yet" }),
+        el("span", { text: "It will show up once there's some history." }),
+      ]));
+  }
+}
+
+function renderMetrics(points) {
+  if (points.length === 0) {
+    metricsChart.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "Nothing to show just yet" }),
+        el("span", { text: "As you process batches and send corrections, you'll watch this number climb. Keep going!" }),
+      ]));
+    return;
+  }
+  const bars = el("div", { class: "metric-bars", attrs: { role: "img",
+    "aria-label": "Weekly share of labels read confidently" } });
+  for (const p of points) {
+    const pct = clampPct(p.pct_confident);
+    const col = el("div", { class: "metric-col" });
+    col.append(el("div", { class: "metric-val", text: `${Math.round(pct)}%` }));
+    const wrap = el("div", { class: "metric-bar-wrap" });
+    const bar = el("div", { class: "metric-bar" });
+    bar.style.height = `${pct}%`;
+    wrap.append(bar);
+    col.append(wrap);
+    col.append(el("div", { class: "metric-week", text: weekLabel(p.week) }));
+    bars.append(col);
+  }
+  metricsChart.replaceChildren(bars);
+}
+
+function clampPct(v) {
+  let n = Number(v);
+  if (!isFinite(n)) n = 0;
+  if (n <= 1) n *= 100; // accept either 0..1 or 0..100
+  return Math.max(0, Math.min(100, n));
+}
+function weekLabel(w) {
+  if (w == null) return "";
+  const d = new Date(w);
+  if (!isNaN(d.getTime())) return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return String(w);
+}
+
+/* ===================================================================== *
+ *  Health check (header status)
+ * ===================================================================== */
+async function checkHealth() {
+  const dot = $("#health-dot");
+  const label = $("#health-label");
+  try {
+    const data = await api.health();
+    const ok = data && data.status === "ok";
+    dot.className = `health-dot ${ok ? "is-ok" : "is-down"}`;
+    label.textContent = ok ? "Connected" : "Service issue";
+  } catch {
+    dot.className = "health-dot is-down";
+    label.textContent = "Offline";
+  }
+}
+
+/* ===================================================================== *
+ *  Boot
+ * ===================================================================== */
+checkHealth();
+loadBatches();
+loadMetrics();

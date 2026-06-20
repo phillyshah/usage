@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Env / secrets
+.env
+.env.local
+
+# Local offline store (mimics Storage buckets in OFFLINE_MODE)
+.localdata/
+
+# Build / OS
+*.log
+.DS_Store
+dist/
+build/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/

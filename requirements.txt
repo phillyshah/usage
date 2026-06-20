@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic-settings
+python-dotenv
+supabase
+anthropic
+openpyxl
+pillow
+numpy
+opencv-python-headless
+pylibdmtx
+pyzbar
+biip
+apscheduler
