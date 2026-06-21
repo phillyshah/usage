@@ -29,12 +29,32 @@
         </div>
       </div>
 
-      <div class="header-status">
-        <span id="health-dot" class="health-dot is-unknown" aria-hidden="true"></span>
-        <span id="health-label" class="health-label">Checking connection…</span>
+      <div class="header-right">
+        <div class="header-status">
+          <span id="health-dot" class="health-dot is-unknown" aria-hidden="true"></span>
+          <span id="health-label" class="health-label">Checking connection…</span>
+        </div>
+        <button type="button" id="whats-new-btn" class="whats-new-btn" aria-haspopup="dialog">
+          What's New
+        </button>
       </div>
     </div>
   </header>
+
+  <!-- ===================== WHAT'S NEW MODAL ===================== -->
+  <dialog id="whats-new-modal" class="changelog-modal" aria-labelledby="changelog-title">
+    <div class="changelog-inner">
+      <div class="changelog-head">
+        <h2 class="changelog-title" id="changelog-title">What's New</h2>
+        <button type="button" id="whats-new-close" class="changelog-close" aria-label="Close">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div id="changelog-body" class="changelog-body">
+        <p class="muted-note">Loading…</p>
+      </div>
+    </div>
+  </dialog>
 
   <!-- ===================== HELP PANEL ===================== -->
   <section class="container help-wrap">
@@ -276,8 +296,9 @@
   </main>
 
   <footer class="site-footer">
-    <div class="container">
+    <div class="container footer-inner">
       <p>Usage — internal distributor label tool. Need help? Reach out to your team lead.</p>
+      <p id="footer-version" class="footer-version"></p>
     </div>
   </footer>
 

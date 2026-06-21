@@ -138,12 +138,13 @@ class _SupabaseBackend:
 
     def replace_all(self, table: str, rows: list[dict], key_col: str = "id") -> None:
         # Full replace: delete every row, then insert in chunks. PostgREST
-        # requires a filter on delete; "<pk> is not null" matches all rows and
+        # requires a filter on delete; "column is not null" matches all rows and
         # works whether the pk is a serial id (reference_lots) or text
-        # (reference_parts.part_no).
-        self.client.table(table).delete().not_.is_(key_col, "null").execute()
-        for i in range(0, len(rows), 500):
-            self.client.table(table).insert(rows[i : i + 500]).execute()
+        # (reference_parts.part_no). Pass Python None so supabase-py 2.x
+        # generates the correct "not.is.null" PostgREST filter.
+        self.client.table(table).delete().not_.is_(key_col, None).execute()
+        for i in range(0, len(rows), 1000):
+            self.client.table(table).insert(rows[i : i + 1000]).execute()
 
     def select(self, table: str) -> list[dict]:
         return self.client.table(table).select("*").execute().data or []

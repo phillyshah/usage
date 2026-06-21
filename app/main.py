@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import io
 import logging
+import traceback
+from asyncio import get_event_loop
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,6 +24,7 @@ from app.jobs import shutdown_scheduler, start_scheduler
 from app.metrics import auto_resolve_by_week
 from app.pipeline.run import ingest_image, run_batch
 from app.storage import OUTPUT_SHEETS, get_object, split_ref
+from app.version import CHANGELOG, VERSION
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("main")
@@ -39,15 +43,22 @@ async def lifespan(app: FastAPI):
     shutdown_scheduler()
 
 
-app = FastAPI(title="Usage — Label Extraction", version="1.0.0", lifespan=lifespan)
+_executor = ThreadPoolExecutor(max_workers=2)
+
+app = FastAPI(title="Usage — Label Extraction", version=VERSION, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
-# Health
+# Health + version
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/version")
+def version():
+    return {"version": VERSION, "changelog": CHANGELOG}
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +174,26 @@ async def reference_log(file: UploadFile = File(...)):
     from app.storage import REFERENCE_LOGS, put_object
 
     data = await file.read()
-    put_object(REFERENCE_LOGS, file.filename or "Expiry_Log.xlsx", data,
-               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    summary = ingest_expiry_log(data)
+    fname = file.filename or "Expiry_Log.xlsx"
+
+    # Store a copy for audit (non-fatal: log and continue on failure).
+    try:
+        put_object(REFERENCE_LOGS, fname, data,
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as exc:
+        log.warning("Reference log storage upload failed (non-fatal): %s", exc)
+
+    # Parse + full-replace reference tables. Run on a thread so we don't
+    # block the asyncio event loop during the 60k-row Supabase insert.
+    loop = get_event_loop()
+    try:
+        summary = await loop.run_in_executor(_executor, ingest_expiry_log, data)
+    except Exception as exc:
+        log.error("ingest_expiry_log failed: %s", traceback.format_exc())
+        return JSONResponse(
+            {"detail": f"Could not process the Expiry Log: {exc}"},
+            status_code=500,
+        )
     return summary
 
 

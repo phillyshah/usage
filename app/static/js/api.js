@@ -141,4 +141,9 @@ export const api = {
       method: "GET",
     });
   },
+
+  /** GET /version -> {version, changelog:[{version, date, notes:[]}]} */
+  getVersion() {
+    return request("/version", { method: "GET" });
+  },
 };
