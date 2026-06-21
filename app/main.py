@@ -24,6 +24,7 @@ from app.jobs import shutdown_scheduler, start_scheduler
 from app.metrics import auto_resolve_by_week
 from app.pipeline.run import ingest_image, run_batch
 from app.storage import OUTPUT_SHEETS, get_object, split_ref
+from app.supabase_key import WRONG_KEY_HELP, detect_key_role
 from app.version import CHANGELOG, VERSION
 
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +60,27 @@ def health():
 @app.get("/version")
 def version():
     return {"version": VERSION, "changelog": CHANGELOG}
+
+
+@app.get("/diag")
+def diag():
+    """Non-secret diagnostics. Reports the datastore mode and the *role* of the
+    configured Supabase key (never the key itself) so a misconfigured
+    service_role key can be spotted without pasting any secret."""
+    info: dict = {"datastore": "offline" if db.offline else "supabase"}
+    if not db.offline:
+        role = detect_key_role(settings.supabase_service_key) or "unknown"
+        info["key_role"] = role
+        info["key_ok"] = role == "service_role"
+    return info
+
+
+def _explain_ingest_error(exc: Exception) -> str:
+    """Turn raw datastore errors into operator-actionable messages."""
+    msg = str(exc)
+    if "42501" in msg or "row-level security" in msg:
+        return f"Supabase rejected the write (row-level security). {WRONG_KEY_HELP}"
+    return f"Could not process the Expiry Log: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -190,10 +212,7 @@ async def reference_log(file: UploadFile = File(...)):
         summary = await loop.run_in_executor(_executor, ingest_expiry_log, data)
     except Exception as exc:
         log.error("ingest_expiry_log failed: %s", traceback.format_exc())
-        return JSONResponse(
-            {"detail": f"Could not process the Expiry Log: {exc}"},
-            status_code=500,
-        )
+        return JSONResponse({"detail": _explain_ingest_error(exc)}, status_code=500)
     return summary
 
 

@@ -13,6 +13,7 @@ imports the Supabase client directly. Table and column names match
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -20,6 +21,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.config import settings
+from app.supabase_key import detect_key_role, is_privileged_key
+
+log = logging.getLogger("db")
 
 # Tables we persist in the local backend (mirrors the schema).
 _LOCAL_TABLES = [
@@ -130,6 +134,16 @@ class _SupabaseBackend:
     def __init__(self):
         from supabase import create_client  # imported lazily
 
+        # Warn loudly (but don't crash) if the configured key can't bypass RLS —
+        # otherwise every write fails with a cryptic 42501 at runtime.
+        if not is_privileged_key(settings.supabase_service_key):
+            role = detect_key_role(settings.supabase_service_key) or "unknown"
+            log.warning(
+                "SUPABASE_SERVICE_KEY does not look like a service_role key "
+                "(detected role=%s). Database writes will fail with row-level "
+                "security errors until this is the service_role secret.",
+                role,
+            )
         self.client = create_client(settings.supabase_url, settings.supabase_service_key)
 
     def insert(self, table: str, row: dict) -> dict:

@@ -23,3 +23,7 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Real test fixtures (real business data — keep out of git; see fixtures/README)
+tests/fixtures/Expiry_Log.xlsx
+tests/fixtures/ticket_*.jpg

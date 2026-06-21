@@ -47,13 +47,13 @@ class _SupabaseStorage:
         self.client = db.backend.client  # reuse the configured service-role client
 
     def put(self, bucket: str, path: str, data: bytes, content_type: str) -> str:
-        # supabase-py 2.x (storage-3x-python): upsert must be the Python bool
-        # True (sent as the x-upsert header); "true" (string) is rejected.
-        # If the file already exists the upsert:True path overwrites silently.
+        # storage3 2.x copies the `upsert` option straight into the `x-upsert`
+        # HTTP header, so it must be the STRING "true" (httpx rejects a bool
+        # header value with a TypeError). Upsert overwrites if the object exists.
         self.client.storage.from_(bucket).upload(
             path,
             data,
-            {"content-type": content_type, "upsert": True},
+            {"content-type": content_type, "upsert": "true"},
         )
         return f"{bucket}/{path}"
 
