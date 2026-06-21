@@ -5,26 +5,48 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [1.1.0] — 2026-06-21
+## [1.1.1] — 2026-06-21
 
 ### Fixed
-- Expiry Log upload returned "Internal Server Error" on large files (63 k rows).
-  Root causes: Supabase delete filter used string `"null"` instead of Python `None`,
-  causing the `not.is.null` PostgREST filter to be generated incorrectly; storage
-  upload used `upsert: "true"` (string) where supabase-py 2.x requires `True` (bool).
-- Added per-route error handling so the UI now shows the actual failure reason
-  instead of a bare "Internal Server Error".
-- Expiry Log ingest now runs off the asyncio event loop (ThreadPoolExecutor) so
-  a 63 k-row Supabase insert can't block other requests.
-- Insert chunk size increased from 500 → 1,000 rows (fewer round-trips).
-- Storage upload failure is now non-fatal (logged + skipped) so a bucket permission
-  issue won't prevent the reference data from being updated.
+- **Expiry Log upload failing with "Internal Server Error" — real root cause.**
+  The actual failure was a Supabase **row-level-security rejection** (`42501`):
+  the `SUPABASE_SERVICE_KEY` configured on the server was the publishable/anon key,
+  which cannot bypass RLS. This is an operator configuration issue (set the
+  `service_role` secret), but the app now **detects and explains it**:
+  - The 42501 error is translated into an actionable message naming the wrong key
+    and pointing to Supabase → Project Settings → API.
+  - Startup logs a clear warning when `SUPABASE_SERVICE_KEY` doesn't look like a
+    `service_role` key (decodes the key's role claim; never logs the key).
+  - New `GET /diag` reports the datastore mode and the configured key's *role*
+    (e.g. `service_role` vs `anon`) so the key can be verified without exposing it.
+- **Reverted an incorrect v1.1.0 change**: storage `upsert` must be the string
+  `"true"`, not the bool `True` — storage3 2.x copies it straight into the
+  `x-upsert` HTTP header and httpx rejects non-string header values. Added a
+  regression test pinning this.
+- **What's New modal could not be closed.** The base `.changelog-modal` rule set
+  `display: flex`, overriding the native `<dialog>` hidden state so `close()` had
+  no effect. Now scoped to `.changelog-modal[open]`.
+
+### Added
+- `app/supabase_key.py` — decode a Supabase key's role (JWT claim or `sb_*` prefix)
+  to detect a non-privileged key. Fully unit-tested.
+- `tests/` — key-role detection, 42501 error translation, storage upsert-header
+  contract, large-log ingest (60 k rows), `/version` + `/diag`, and a conditional
+  test that loads the **real** Expiry Log to 63,214 / 1,682 / 51,365.
+
+### Note (1.1.0)
+1.1.0 added the What's New panel and better error handling but its Supabase
+delete-filter / storage-upsert changes were no-ops or incorrect; 1.1.1 supersedes it.
+
+## [1.1.0] — 2026-06-21
 
 ### Added
 - `GET /version` endpoint returns current version and full changelog.
 - "What's New" button in the header opens a changelog modal.
 - Version number displayed in the page footer.
 - `app/version.py` — single source of truth for version + changelog data.
+- Per-route error handling so the UI shows the failure reason, not a bare 500.
+- Expiry Log ingest runs off the asyncio event loop (ThreadPoolExecutor).
 
 ---
 
