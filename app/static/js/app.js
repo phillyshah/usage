@@ -569,8 +569,64 @@ async function checkHealth() {
 }
 
 /* ===================================================================== *
+ *  What's New modal
+ * ===================================================================== */
+const whatsNewBtn   = $("#whats-new-btn");
+const whatsNewModal = $("#whats-new-modal");
+const whatsNewClose = $("#whats-new-close");
+const changelogBody = $("#changelog-body");
+const footerVersion = $("#footer-version");
+
+let changelogLoaded = false;
+
+function renderChangelog(changelog) {
+  changelogBody.replaceChildren();
+  for (const entry of changelog) {
+    const section = el("div", { class: "cl-entry" });
+    section.append(
+      el("div", { class: "cl-header" }, [
+        el("span", { class: "cl-version", text: `v${entry.version}` }),
+        el("span", { class: "cl-date", text: entry.date }),
+      ]),
+      el("ul", { class: "cl-notes" },
+        (entry.notes || []).map((n) => el("li", { text: n }))
+      )
+    );
+    changelogBody.append(section);
+  }
+}
+
+async function loadChangelog() {
+  if (changelogLoaded) return;
+  changelogBody.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
+  try {
+    const data = await api.getVersion();
+    if (data && data.changelog) renderChangelog(data.changelog);
+    if (data && data.version) {
+      whatsNewBtn.textContent = `What's New · v${data.version}`;
+      if (footerVersion) footerVersion.textContent = `v${data.version}`;
+    }
+    changelogLoaded = true;
+  } catch {
+    changelogBody.replaceChildren(el("p", { class: "muted-note", text: "Couldn't load changelog." }));
+  }
+}
+
+whatsNewBtn.addEventListener("click", () => {
+  loadChangelog();
+  whatsNewModal.showModal();
+});
+
+whatsNewClose.addEventListener("click", () => whatsNewModal.close());
+
+whatsNewModal.addEventListener("click", (e) => {
+  if (e.target === whatsNewModal) whatsNewModal.close();
+});
+
+/* ===================================================================== *
  *  Boot
  * ===================================================================== */
 checkHealth();
 loadBatches();
 loadMetrics();
+loadChangelog(); // prefetch version + populate footer quietly
