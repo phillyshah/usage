@@ -4,8 +4,11 @@
 FROM python:3.11-slim-bookworm
 
 # System libraries for opencv, DataMatrix (libdmtx) and linear (zbar) decoding.
+# NOTE: the libdmtx shared-lib package name differs per Debian release:
+#   bookworm -> libdmtx0b   |   trixie -> libdmtx0t64   |   older -> libdmtx0
+# We pin to bookworm above, so use libdmtx0b.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libdmtx0 libzbar0 libgl1 libglib2.0-0 \
+    libdmtx0b libzbar0 libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
