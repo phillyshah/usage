@@ -1,4 +1,7 @@
-FROM python:3.11-slim
+# Pin to Debian 12 (bookworm). On Debian 13 (trixie) the barcode lib was
+# renamed libdmtx0 -> libdmtx0t64 (the time_t transition), which breaks the
+# apt install below. Bookworm keeps the original package names.
+FROM python:3.11-slim-bookworm
 
 # System libraries for opencv, DataMatrix (libdmtx) and linear (zbar) decoding.
 RUN apt-get update && apt-get install -y --no-install-recommends \
