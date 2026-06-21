@@ -2,7 +2,7 @@ services:
   labels-api:
     build: .
     env_file: .env
-    networks: [traefik]
+    networks: [proxy]
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.labels.rule=Host(`usage.90ten.life`)"
@@ -11,5 +11,5 @@ services:
       - "traefik.http.services.labels.loadbalancer.server.port=8000"
     restart: unless-stopped
 networks:
-  traefik:
+  proxy:
     external: true
