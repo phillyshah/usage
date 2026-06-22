@@ -5,9 +5,28 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "1.3.0"
+VERSION = "2.0.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.0.0",
+        "date": "2026-06-22",
+        "notes": [
+            "New accountant deliverable: a flat 26-column output (plus a Source "
+            "Image Filename) — one row per device unit — matching the agreed "
+            "output_columns.csv exactly",
+            "Device identity now comes from the barcode GTIN: GTIN → SKU (Ref "
+            "Number) → Description / Part Type / Category, looked up from the new "
+            "product master (no more reading descriptions off the photo)",
+            "Surgeon + distributor code now resolve the surgeon, hospital and "
+            "region automatically, and flag when the code doesn't match the surgeon",
+            "Reads the printed REF code (240) straight off the barcode, and reads "
+            "barcodes reliably on full-size phone photos",
+            "Wasted components (a handwritten 'W') are kept as a usage row, "
+            "highlighted yellow with a WASTED note — and still count toward the total",
+            "One row per implant unit so every lot stays traceable",
+        ],
+    },
     {
         "version": "1.3.0",
         "date": "2026-06-22",

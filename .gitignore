@@ -27,3 +27,10 @@ htmlcov/
 # Real test fixtures (real business data — keep out of git; see fixtures/README)
 tests/fixtures/Expiry_Log.xlsx
 tests/fixtures/ticket_*.jpg
+
+# PHI: real patient ticket photos must NEVER be committed (BUILD_SPEC §9). Drop
+# them in locally to verify redaction; these patterns keep them out of git.
+tests/fixtures/real/
+*.jpeg
+MH*.jpg
+MO*.jpg

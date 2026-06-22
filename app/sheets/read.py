@@ -34,27 +34,31 @@ _TICKET_HEADERS = {
 _LINE_HEADERS = {
     "Ticket ID": "ticket_id",
     "Line ID": "line_id",
-    # new "Usage" sheet
+    # current "Line Items" sheet (carries the stable Line ID)
+    "Ref Number": "ref",
     "Reference Number": "ref",
+    "Description": "description",
     "Lot Number": "lot",
     "Quantity": "qty",
-    "Price": "unit_price",
+    "Mfg Date": "mfg_date",
+    "Expiry Date": "expiry_date",
     "Expiration Date": "expiry_date",
+    "Unit Price": "unit_price",
+    "Price": "unit_price",
+    "Line Total": "line_total",
+    "Flags / Notes": "flags",
     "Notes": "flags",
-    # legacy "Line Items" sheet
+    # legacy headers (older workbooks)
     "REF (Part No)": "ref",
-    "Description": "description",
     "Size": "size",
     "LOT": "lot",
     "Qty": "qty",
-    "Mfg Date": "mfg_date",
-    "Unit Price": "unit_price",
-    "Line Total": "line_total",
-    "Flags / Notes": "flags",
 }
 
-# Sheets that hold per-line rows, newest layout first.
-_LINE_SHEETS = ("Usage", "Line Items")
+# Sheets that hold per-line rows WITH the stable IDs we match on. The flat
+# "Usage" deliverable carries no Ticket/Line ID, so corrections are matched from
+# the "Line Items" sheet; "Usage" remains a fallback for older workbooks.
+_LINE_SHEETS = ("Line Items", "Usage")
 
 
 def _header_index(ws, header_map: dict) -> dict:

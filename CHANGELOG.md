@@ -5,6 +5,52 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [2.0.0] — 2026-06-22
+
+Major: re-targets the output and extraction to the distributor-label handoff spec
+(`docs/` package + `reference/` masters). **Breaking** for the workbook layout.
+
+### Added
+- **Product/surgeon reference masters** (`reference/GTIN_Codes.csv`,
+  `part_info.csv`, `surgeon_info.csv`) with full-replace ingest:
+  - `GTIN_14 → SKU` (Ref Number) + product status (5,413 rows)
+  - `Ref Number → Description / Part Type / Category` (1,719 rows; row-1 junk +
+    row-2 header handled)
+  - `<SurgeonLastName><DistCode> → SurgeonName / Hospital / Region / canonical
+    DistCode` (~559 records; address-overflow rows skipped)
+  - New tables `reference_gtin`, `reference_part_info`, `reference_surgeons`,
+    `masters_ingests` (`db/09_reference_masters.sql`); seeded on startup from the
+    bundled CSVs, re-uploadable via `POST /reference/masters`.
+- **New "Usage" deliverable sheet** — the flat, one-row-per-unit output: the 26
+  `reference/output_columns.csv` columns in order, led by `Source Image Filename`,
+  plus a trailing `Notes` aid. Device columns are **joins, not reads** (GTIN→SKU→
+  part_info); surgeon columns come from the surgeon master.
+- **Barcode `(240)` REF** capture, a separator-free GS1 parser for the Maxx
+  DataMatrix grammar, GTIN-14 **mod-10 check-digit** validation, and adaptive
+  decode (shrink/timeout) so full-resolution phone photos decode.
+- **Wasted-item** handling: a handwritten "W"/"wasted" emits the usage row with a
+  `WASTED` note and a yellow Price cell; the price still counts toward the total.
+- Surgeon↔DistCode match, hospital cross-check, GTIN-status, and lot/expiry
+  validators surface as per-line flags.
+
+### Changed
+- Resolution moved off the Expiry Log for descriptions (now the part_info master);
+  the Expiry Log remains the authoritative lot→expiry validation source.
+- **Quantity is always 1** (one row per physical unit/lot) — a REF used N times
+  yields N rows, never one row of N.
+- Workbook is now four sheets: `Usage` (deliverable), `Tickets`, `Line Items`
+  (carries the Ticket/Line IDs the corrections round-trip matches on), `Legend`.
+
+### Migration
+- Run `db/09_reference_masters.sql` in Supabase before deploying.
+- Upload the three masters via `POST /reference/masters` (or rely on the bundled
+  warm-start) so lookups resolve.
+
+### Security / PHI
+- Real patient ticket photos are **not** committed; the regression suite drives the
+  worked example from decoded barcode strings (device UDI data only). `.gitignore`
+  blocks `*.jpeg` / `MH*` / `MO*` patient images.
+
 ## [1.3.0] — 2026-06-22
 
 ### Added
