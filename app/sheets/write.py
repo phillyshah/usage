@@ -1,15 +1,19 @@
 """Write the color-coded review workbook (openpyxl).
 
-Three sheets: Tickets, Line Items, Legend. Per the confidence model the cell
+Sheets: Usage (the flat, one-row-per-line deliverable the accountants work in),
+Tickets (header-level reconciliation), Legend. Per the confidence model the cell
 colour is driven entirely by the persisted ``field_extractions`` confidence:
     high   -> no fill (confident)
     medium -> amber FFF2CC (low-confidence guess, eyeball it)
     low    -> red   F4CCCC, cell left BLANK (no confident read, human fills)
-Keys (Ticket ID, Line ID, Source Image) and Flags stay uncolored.
+Keys (Ticket ID, Line ID, File) and Notes stay uncolored.
 """
 from __future__ import annotations
 
+import calendar
 import io
+import os
+from datetime import date, datetime
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -39,20 +43,66 @@ TICKET_COLUMNS = [
     ("Flags / Notes", None),
 ]
 
-LINE_COLUMNS = [
-    ("Ticket ID", None),
-    ("Line ID", None),
-    ("REF (Part No)", "ref"),
-    ("Description", "description"),
-    ("Size", "size"),
-    ("LOT", "lot"),
-    ("Qty", "qty"),
-    ("Mfg Date", "mfg_date"),
-    ("Expiration Date", "expiry_date"),
-    ("Unit Price", "unit_price"),
-    ("Line Total", "line_total"),
-    ("Flags / Notes", None),
+# The flat deliverable. Each tuple: (header, kind, field).
+#   kind "key"     -> stable id, uncolored
+#   kind "file"    -> source photo file name, uncolored
+#   kind "ticket"  -> ticket header field (confidence keyed on line_id=None)
+#   kind "month"/"year" -> derived from the ticket's surgery_date
+#   kind "line"    -> line item field (confidence keyed on the line_id)
+#   kind "notes"   -> merged flags, uncolored
+USAGE_COLUMNS = [
+    ("Ticket ID", "key", "ticket_id"),
+    ("Line ID", "key", "line_id"),
+    ("File", "file", None),
+    ("Reload Code", "ticket", "rep_code"),
+    ("Surgeon Name", "ticket", "surgeon"),
+    ("Distributor Code", "ticket", "rep_code"),
+    ("Surgery Date", "ticket", "surgery_date"),
+    ("Surgery Month", "month", "surgery_date"),
+    ("Year", "year", "surgery_date"),
+    ("Hospital Name", "ticket", "hospital"),
+    ("Quantity", "line", "qty"),
+    ("Price", "line", "unit_price"),
+    ("Lot Number", "line", "lot"),
+    ("Reference Number", "line", "ref"),
+    ("Expiration Date", "line", "expiry_date"),
+    ("Notes", "notes", None),
 ]
+
+
+def _parse_date(v):
+    if v in (None, ""):
+        return None
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, date):
+        return v
+    s = str(v).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _month_name(v):
+    d = _parse_date(v)
+    return calendar.month_name[d.month] if d else None
+
+
+def _year(v):
+    d = _parse_date(v)
+    return d.year if d else None
+
+
+def _file_stem(name):
+    """'MO083596.jpg' -> 'MO083596'. Returns None for empty."""
+    if not name:
+        return None
+    base = os.path.basename(str(name))
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    return stem or None
 
 
 def _conf_map(ticket_id: str) -> dict:
@@ -91,38 +141,90 @@ def _autosize(ws, ncols: int) -> None:
         ws.column_dimensions[letter].width = min(maxlen + 2, 48)
 
 
+def _flags_text(obj) -> str:
+    flags = obj.get("flags") or []
+    return "; ".join(flags) if isinstance(flags, list) else str(flags)
+
+
+def _write_usage_sheet(ws, tickets) -> None:
+    """The flat, one-row-per-line deliverable the accountants work in."""
+    ws.append([h for h, _, _ in USAGE_COLUMNS])
+    _style_header(ws, len(USAGE_COLUMNS))
+
+    for ticket in tickets:
+        cmap = _conf_map(ticket["ticket_id"])
+        lines = db.lines_for_ticket(ticket["ticket_id"])
+        lines.sort(key=lambda x: x.get("created_at") or "")
+        ticket_flags = _flags_text(ticket)
+
+        for i, line in enumerate(lines):
+            values: list = []
+            fills: list = []  # confidence per column (None where uncolored)
+            for header, kind, field in USAGE_COLUMNS:
+                conf = None
+                if kind == "key":
+                    val = ticket["ticket_id"] if field == "ticket_id" else line["line_id"]
+                elif kind == "file":
+                    val = _file_stem(ticket.get("source_filename"))
+                elif kind == "notes":
+                    parts = [_flags_text(line)]
+                    if i == 0 and ticket_flags:  # ticket notes once, on the first line
+                        parts.append(ticket_flags)
+                    val = "; ".join(p for p in parts if p)
+                else:
+                    if kind == "line":
+                        conf = cmap.get((line["line_id"], field), "low")
+                    else:  # ticket / month / year all key on the ticket header field
+                        conf = cmap.get((None, field), "low")
+                    if conf == "low":
+                        val = ""
+                    elif kind == "month":
+                        val = _month_name(ticket.get(field))
+                    elif kind == "year":
+                        val = _year(ticket.get(field))
+                    elif kind == "line":
+                        val = line.get(field)
+                    else:
+                        val = ticket.get(field)
+                values.append(val)
+                fills.append(conf)
+            ws.append(values)
+            r = ws.max_row
+            for idx, conf in enumerate(fills, start=1):
+                fill = _fill_for(conf) if conf else None
+                if fill:
+                    ws.cell(row=r, column=idx).fill = fill
+
+    _autosize(ws, len(USAGE_COLUMNS))
+
+
 def write_review_workbook(batch_id: str) -> bytes:
     wb = Workbook()
-
-    # ---- Sheet 1: Tickets ----
-    ws_t = wb.active
-    ws_t.title = "Tickets"
-    ws_t.append([h for h, _ in TICKET_COLUMNS])
-    _style_header(ws_t, len(TICKET_COLUMNS))
-
-    # ---- Sheet 2: Line Items ----
-    ws_l = wb.create_sheet("Line Items")
-    ws_l.append([h for h, _ in LINE_COLUMNS])
-    _style_header(ws_l, len(LINE_COLUMNS))
 
     tickets = db.tickets_for_batch(batch_id)
     tickets.sort(key=lambda t: t.get("created_at") or "")
 
+    # ---- Sheet 1: Usage (the deliverable) ----
+    ws_u = wb.active
+    ws_u.title = "Usage"
+    _write_usage_sheet(ws_u, tickets)
+
+    # ---- Sheet 2: Tickets (header-level reconciliation + round-trip) ----
+    ws_t = wb.create_sheet("Tickets")
+    ws_t.append([h for h, _ in TICKET_COLUMNS])
+    _style_header(ws_t, len(TICKET_COLUMNS))
     for ticket in tickets:
         cmap = _conf_map(ticket["ticket_id"])
-        # Tickets row
         row_vals = []
         for header, field in TICKET_COLUMNS:
             if header == "Ticket ID":
                 row_vals.append(ticket["ticket_id"])
             elif header == "Source Image":
-                row_vals.append(ticket.get("source_image_path") or "")
+                row_vals.append(_file_stem(ticket.get("source_filename")) or "")
             elif header == "Flags / Notes":
-                flags = ticket.get("flags") or []
-                row_vals.append("; ".join(flags) if isinstance(flags, list) else str(flags))
+                row_vals.append(_flags_text(ticket))
             else:
                 conf = cmap.get((None, field), "low")
-                # low => blank cell
                 row_vals.append("" if conf == "low" else ticket.get(field))
         ws_t.append(row_vals)
         r = ws_t.max_row
@@ -132,34 +234,7 @@ def write_review_workbook(batch_id: str) -> bytes:
             fill = _fill_for(cmap.get((None, field), "low"))
             if fill:
                 ws_t.cell(row=r, column=idx).fill = fill
-
-        # Line rows
-        lines = db.lines_for_ticket(ticket["ticket_id"])
-        lines.sort(key=lambda x: x.get("created_at") or "")
-        for line in lines:
-            lvals = []
-            for header, field in LINE_COLUMNS:
-                if header == "Ticket ID":
-                    lvals.append(ticket["ticket_id"])
-                elif header == "Line ID":
-                    lvals.append(line["line_id"])
-                elif header == "Flags / Notes":
-                    flags = line.get("flags") or []
-                    lvals.append("; ".join(flags) if isinstance(flags, list) else str(flags))
-                else:
-                    conf = cmap.get((line["line_id"], field), "low")
-                    lvals.append("" if conf == "low" else line.get(field))
-            ws_l.append(lvals)
-            lr = ws_l.max_row
-            for idx, (header, field) in enumerate(LINE_COLUMNS, start=1):
-                if field is None:
-                    continue
-                fill = _fill_for(cmap.get((line["line_id"], field), "low"))
-                if fill:
-                    ws_l.cell(row=lr, column=idx).fill = fill
-
     _autosize(ws_t, len(TICKET_COLUMNS))
-    _autosize(ws_l, len(LINE_COLUMNS))
 
     # ---- Sheet 3: Legend ----
     ws_g = wb.create_sheet("Legend")

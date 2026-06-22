@@ -40,6 +40,7 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
         ticket = db.create_ticket({
             "batch_id": batch_id,
             "source_image_path": None,
+            "source_filename": filename or None,
             "entity": template if template != "Unknown" else None,
             "status": "manual_queue",
             "flags": ["Patient region could not be located — manual review required"],
@@ -51,6 +52,7 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
     ticket = db.create_ticket({
         "batch_id": batch_id,
         "entity": template,
+        "source_filename": filename or None,
         "status": "pending_review",
     })
     redacted_bytes = preprocess.encode_image(redacted, ".jpg") or data

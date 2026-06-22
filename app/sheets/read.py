@@ -1,8 +1,9 @@
 """Parse a corrected review workbook back into structured rows.
 
-Reads the Tickets and Line Items sheets by header name (robust to column
-reordering) and returns the corrected facts keyed by the stable Ticket ID /
-Line ID. The learning harvest and the diff both consume this.
+Reads the Tickets header sheet and the per-line sheet (the new "Usage" sheet,
+or the legacy "Line Items" sheet) by header name — robust to column reordering —
+and returns the corrected facts keyed by the stable Ticket ID / Line ID. The
+learning harvest and the diff both consume this.
 """
 from __future__ import annotations
 
@@ -26,20 +27,34 @@ _TICKET_HEADERS = {
     "Sum of Line Totals": "sum_line_totals",
     "Flags / Notes": "flags",
 }
+# Covers both the new "Usage" sheet headers and the legacy "Line Items" headers
+# so corrected workbooks from either layout parse. Ticket-level columns that the
+# Usage sheet repeats per line (Reload Code, Surgeon Name, …) are intentionally
+# absent here — header corrections are read from the Tickets sheet only.
 _LINE_HEADERS = {
     "Ticket ID": "ticket_id",
     "Line ID": "line_id",
+    # new "Usage" sheet
+    "Reference Number": "ref",
+    "Lot Number": "lot",
+    "Quantity": "qty",
+    "Price": "unit_price",
+    "Expiration Date": "expiry_date",
+    "Notes": "flags",
+    # legacy "Line Items" sheet
     "REF (Part No)": "ref",
     "Description": "description",
     "Size": "size",
     "LOT": "lot",
     "Qty": "qty",
     "Mfg Date": "mfg_date",
-    "Expiration Date": "expiry_date",
     "Unit Price": "unit_price",
     "Line Total": "line_total",
     "Flags / Notes": "flags",
 }
+
+# Sheets that hold per-line rows, newest layout first.
+_LINE_SHEETS = ("Usage", "Line Items")
 
 
 def _header_index(ws, header_map: dict) -> dict:
@@ -85,8 +100,9 @@ def parse_corrected_workbook(data: bytes) -> dict:
                     rec[field] = _clean(row[col - 1].value)
                 tickets[tid] = rec
 
-    if "Line Items" in wb.sheetnames:
-        ws = wb["Line Items"]
+    line_sheet = next((s for s in _LINE_SHEETS if s in wb.sheetnames), None)
+    if line_sheet:
+        ws = wb[line_sheet]
         idx = _header_index(ws, _LINE_HEADERS)
         tid_col = idx.get("ticket_id")
         lid_col = idx.get("line_id")

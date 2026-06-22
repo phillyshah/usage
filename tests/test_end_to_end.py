@@ -73,28 +73,26 @@ def test_full_pipeline():
     r = client.get(f"/batches/{batch_id}/sheet")
     assert r.status_code == 200, r.text
     wb = load_workbook(io.BytesIO(r.content))
-    assert wb.sheetnames == ["Tickets", "Line Items", "Legend"]
+    assert wb.sheetnames == ["Usage", "Tickets", "Legend"]
 
-    ws_lines = wb["Line Items"]
+    ws_lines = wb["Usage"]
     headers = [c.value for c in ws_lines[1]]
-    assert "REF (Part No)" in headers
+    assert "Reference Number" in headers
     # The barcode-driven line resolved from the log.
     rows = list(ws_lines.iter_rows(min_row=2, values_only=True))
     assert rows, "expected at least one line item"
-    ref_col = headers.index("REF (Part No)")
-    lot_col = headers.index("LOT")
-    desc_col = headers.index("Description")
+    ref_col = headers.index("Reference Number")
+    lot_col = headers.index("Lot Number")
     assert rows[0][ref_col] == REF
     assert rows[0][lot_col] == LOT
-    assert rows[0][desc_col] == DESC
 
-    # Unit Price had no vision read -> blank + red fill (low confidence).
-    price_col = headers.index("Unit Price") + 1  # openpyxl 1-based
+    # Price had no vision read -> blank + red fill (low confidence).
+    price_col = headers.index("Price") + 1  # openpyxl 1-based
     price_cell = ws_lines.cell(row=2, column=price_col)
     assert price_cell.value in (None, ""), "price should be blank without a vision read"
     assert price_cell.fill.fgColor.rgb.endswith("F4CCCC"), "blank price should be red"
 
-    # REF resolved from the log -> no fill (confident).
+    # REF resolved from the barcode + log -> no fill (confident).
     ref_cell = ws_lines.cell(row=2, column=ref_col + 1)
     fill = ref_cell.fill.fgColor.rgb
     assert fill in (None, "00000000"), f"confident REF should be unfilled, got {fill}"
@@ -113,12 +111,12 @@ def test_full_pipeline():
 
 
 def _corrected_copy(r_content: bytes, price: float) -> bytes:
-    """Open the generated workbook, fill the blank Unit Price, return bytes."""
+    """Open the generated workbook, fill the blank Price, return bytes."""
     wb = load_workbook(io.BytesIO(r_content))
-    ws = wb["Line Items"]
+    ws = wb["Usage"]
     headers = [c.value for c in ws[1]]
-    price_col = headers.index("Unit Price") + 1
-    qty_col = headers.index("Qty") + 1
+    price_col = headers.index("Price") + 1
+    qty_col = headers.index("Quantity") + 1
     ws.cell(row=2, column=qty_col).value = 1
     ws.cell(row=2, column=price_col).value = price
     buf = io.BytesIO()

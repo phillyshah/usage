@@ -146,4 +146,9 @@ export const api = {
   getVersion() {
     return request("/version", { method: "GET" });
   },
+
+  /** GET /reference/status -> {loaded, updated_at, row_count, unique_parts, unique_lots} */
+  referenceStatus() {
+    return request("/reference/status", { method: "GET" });
+  },
 };

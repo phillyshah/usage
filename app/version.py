@@ -5,9 +5,23 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "1.3.0",
+        "date": "2026-06-22",
+        "notes": [
+            "New 'Usage' output sheet with exactly the columns your accountants "
+            "need: Reload Code, Surgeon, Distributor Code, Surgery Date/Month/Year, "
+            "Hospital, Quantity, Price, Lot, Reference, Expiration",
+            "Added a File column so each row traces back to the source photo "
+            "(uses the uploaded file's name)",
+            "The reference log card now shows when it was last updated",
+            "Fixed the What's New window so it opens and closes reliably (X, Esc, "
+            "or click outside)",
+        ],
+    },
     {
         "version": "1.2.0",
         "date": "2026-06-22",

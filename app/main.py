@@ -216,6 +216,21 @@ async def reference_log(file: UploadFile = File(...)):
     return summary
 
 
+@app.get("/reference/status")
+def reference_status():
+    """When the Expiry Log was last updated + its counts (for the UI banner)."""
+    latest = db.latest_log_ingest()
+    if not latest:
+        return {"loaded": False}
+    return {
+        "loaded": True,
+        "updated_at": latest.get("ingested_at"),
+        "row_count": latest.get("row_count"),
+        "unique_parts": latest.get("unique_parts"),
+        "unique_lots": latest.get("unique_lots"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------

@@ -403,6 +403,38 @@ const referencePicker = createPicker({
   accept: isXlsx,
 });
 
+const referenceStatus = $("#reference-status");
+
+function fmtWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) +
+    " at " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+async function loadReferenceStatus() {
+  if (!referenceStatus) return;
+  try {
+    const s = await api.referenceStatus();
+    referenceStatus.classList.remove("is-empty");
+    if (!s || !s.loaded) {
+      referenceStatus.classList.add("is-empty");
+      referenceStatus.replaceChildren(
+        el("span", { text: "No Expiry Log loaded yet — upload one below to get started." })
+      );
+      return;
+    }
+    referenceStatus.replaceChildren(
+      el("span", { class: "ref-status-when", text: `Last updated ${fmtWhen(s.updated_at)}` }),
+      el("span", { class: "ref-status-counts", text:
+        `· ${Number(s.unique_parts || 0).toLocaleString()} parts, ${Number(s.unique_lots || 0).toLocaleString()} lots` }),
+    );
+  } catch {
+    referenceStatus.replaceChildren(); // hidden via :empty
+  }
+}
+
 $("#reference-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!referencePicker.hasFiles()) return;
@@ -421,6 +453,7 @@ $("#reference-form").addEventListener("submit", async (e) => {
     renderNotice(referenceResult, "success", "Reference log updated", [grid]);
     toast("success", "Reference log updated", "The tool now has your latest device info.");
     referencePicker.clear();
+    loadReferenceStatus(); // refresh the "last updated" banner
   } catch (err) {
     renderNotice(referenceResult, "error", "We couldn't update the reference log",
       [el("p", { class: "notice-text", text: "Please upload the Expiry Log as a single .xlsx file and try again." })],
@@ -612,15 +645,25 @@ async function loadChangelog() {
   }
 }
 
-whatsNewBtn.addEventListener("click", () => {
+function openWhatsNew() {
   loadChangelog();
-  whatsNewModal.showModal();
+  whatsNewModal.hidden = false;
+}
+function closeWhatsNew() {
+  whatsNewModal.hidden = true;
+}
+
+whatsNewBtn.addEventListener("click", openWhatsNew);
+whatsNewClose.addEventListener("click", closeWhatsNew);
+
+// Click the dimmed backdrop (but not the card) to dismiss.
+whatsNewModal.addEventListener("click", (e) => {
+  if (e.target === whatsNewModal) closeWhatsNew();
 });
 
-whatsNewClose.addEventListener("click", () => whatsNewModal.close());
-
-whatsNewModal.addEventListener("click", (e) => {
-  if (e.target === whatsNewModal) whatsNewModal.close();
+// ESC closes it.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !whatsNewModal.hidden) closeWhatsNew();
 });
 
 /* ===================================================================== *
@@ -629,4 +672,5 @@ whatsNewModal.addEventListener("click", (e) => {
 checkHealth();
 loadBatches();
 loadMetrics();
+loadReferenceStatus();
 loadChangelog(); // prefetch version + populate footer quietly
