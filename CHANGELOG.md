@@ -5,6 +5,31 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.2.0] — 2026-06-22
+
+### Fixed / Changed
+- **Device columns were blank on real photos** (REF, Description, Size, LOT, Mfg/
+  Expiry). Root cause: line items were built **only** from decoded DataMatrix
+  barcodes, and the vision step was deliberately not asked to read REF/LOT — so
+  when barcode decode failed on phone photos (the common case), there was no key
+  to look up in the Expiry Log and every device field came back empty.
+- **Vision now reads the printed REF and LOT** for each device label
+  (`vision.py` line shape gains `ref` + `lot`). These feed the existing reference
+  resolver, which fills Description/Size from the Expiry Log and can recover a
+  missing REF from the LOT (and the authoritative expiry date for that lot).
+- **Confidence reflects the source**: barcode-confirmed + in-log REF = high
+  (white); OCR-read REF that still matches the log = medium (amber, "double-check");
+  unresolved = low (red). Descriptions remain authoritative from the log, never
+  guessed by the model.
+
+### Added
+- `tests/test_reference_fallback.py` — OCR-REF → log description/size, OCR-LOT →
+  REF + expiry recovery, and unknown-REF stays blank/low.
+
+### Note
+Barcode decode is still the preferred, high-confidence path; this makes the
+printed text a reliable fallback so phone-photo tickets stop coming back empty.
+
 ## [1.1.1] — 2026-06-21
 
 ### Fixed

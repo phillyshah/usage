@@ -31,10 +31,18 @@ Shape:
     "entity": {...}, "rep": {...}, "rep_code": {...}, "surgeon": {...},
     "hospital": {...}, "surgery_date": {...}, "po_number": {...}
   },
-  "lines": [ {"index": <int>, "qty": {...}, "unit_price": {...}} ],
+  "lines": [ {"index": <int>, "ref": {...}, "lot": {...}, "qty": {...}, "unit_price": {...}} ],
   "freight": {...},
   "grand_total": {...}
 }
+
+For each device label, read the PRINTED catalogue/reference number and lot:
+  - "ref": the REF / catalogue number printed on the label (e.g. "RAUUX412-RK",
+    "MO-MSFC-52/MM"). It is printed text, usually labelled "REF" — read it exactly,
+    character for character; do not guess or expand it.
+  - "lot": the lot/batch number printed on the label (usually labelled "LOT").
+Read these from the printed label text even when a barcode is present. Do NOT
+provide a description — that is looked up separately from the reference log.
 
 Dates as ISO YYYY-MM-DD. Money as numbers without symbols. "lines" is ordered
 top-to-bottom; skip empty slots that read "Place Implant Label".

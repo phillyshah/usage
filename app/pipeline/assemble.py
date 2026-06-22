@@ -111,8 +111,19 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     lines: list[dict] = []
     line_conf: list[dict] = []
     for i, label in enumerate(labels):
-        part = resolve_part(label.get("ref"), label.get("gtin"), label.get("lot"))
         vline = vlines[i] if i < len(vlines) else {}
+
+        # Device identity: prefer the barcode (deterministic), fall back to the
+        # REF/LOT that vision read off the printed label. Either one lets the
+        # reference log fill in description/size (and LOT recovers the REF).
+        vref = _v(vline.get("ref"))
+        vlot = _v(vline.get("lot"))
+        ref_in = label.get("ref") or vref
+        lot_in = label.get("lot") or vlot
+        # Did the barcode actually establish identity, or is this OCR-only?
+        from_barcode = bool(label.get("ref") or label.get("lot") or label.get("gtin"))
+
+        part = resolve_part(ref_in, label.get("gtin"), lot_in)
 
         qty = _v(vline.get("qty"))
         qty = int(qty) if isinstance(qty, (int, float)) else (int(qty) if str(qty).isdigit() else None)
@@ -144,7 +155,7 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             "gtin": label.get("gtin"),
             "description": part.get("description"),
             "size": part.get("size"),
-            "lot": label.get("lot"),
+            "lot": lot_in,
             "qty": qty,
             "mfg_date": label.get("mfg"),
             "expiry_date": expiry,
@@ -154,11 +165,25 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             "expiry_ref": part.get("expiry_ref"),
             "flags": [],
         }
+        # Confidence is earned by validation. A barcode-confirmed, in-log REF is
+        # high; an OCR-read REF that still matches the log is medium (legible but
+        # a character could be misread — eyeball it); anything unresolved is low.
+        in_log = part.get("in_log")
+        if in_log:
+            ref_conf = "high" if from_barcode else "medium"
+            desc_conf = "high" if from_barcode else "medium"
+            size_conf = ("high" if from_barcode else "medium") if part.get("size") else "low"
+        elif part.get("ref"):
+            ref_conf = "medium" if from_barcode else "low"
+            desc_conf = "low"
+            size_conf = "low"
+        else:
+            ref_conf = desc_conf = size_conf = "low"
         cmap = {
-            "ref": "high" if part.get("in_log") else ("medium" if part.get("ref") else "low"),
-            "description": "high" if part.get("in_log") else "low",
-            "size": "high" if part.get("size") else "low",
-            "lot": "high" if label.get("lot") else "low",
+            "ref": ref_conf,
+            "description": desc_conf,
+            "size": size_conf,
+            "lot": "high" if label.get("lot") else ("medium" if lot_in else "low"),
             "qty": conf.score_field({"vision": qty, "vision_conf": _c(vline.get("qty"))}),
             "mfg_date": "high" if label.get("mfg") else "low",
             "expiry_date": expiry_conf,
