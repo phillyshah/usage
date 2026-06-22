@@ -5,9 +5,22 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "1.2.0",
+        "date": "2026-06-22",
+        "notes": [
+            "Device columns (REF, Description, Size, LOT, expiry) now fill in even "
+            "when the barcode won't scan: the tool reads the printed REF/LOT and "
+            "looks up the rest in the Expiry Log",
+            "Descriptions and sizes come straight from your Expiry Log, matched by "
+            "REF or LOT",
+            "OCR-read references that match the log show amber (double-check) rather "
+            "than blank",
+        ],
+    },
     {
         "version": "1.1.1",
         "date": "2026-06-21",
