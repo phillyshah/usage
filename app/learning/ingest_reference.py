@@ -1,16 +1,18 @@
 """Reference masters ingest -> full replace of the product/surgeon crosswalks.
 
-Three read-only CSV sources (FIELD_GUIDE §2), each full-replaced on upload:
+Three read-only sources (FIELD_GUIDE §2), each full-replaced on upload. In
+production these are **Excel** workbooks (the same as the Expiry Log); the bundled
+repo copies are CSV exports of the same sheets. The loader accepts either format.
 
-  * GTIN_Codes.csv   header row 1: STATUS,GTIN_14,GTIN_12_UPC,PACKAGING_TYPE,
-                     PACKAGING_LEVEL,PRODUCT_DESCRIPTION,SKU
-  * part_info.csv    row 1 is junk (1,2,3,4); real header is row 2
-                     (Part Number,Description,Part Type,Category); data from row 3.
-  * surgeon_info.csv header row 1; a *record* is any row with a non-empty DistCode.
-                     Address-overflow rows have blank keys -> skip them.
+  * GTIN_Codes   header row 1: STATUS,GTIN_14,GTIN_12_UPC,PACKAGING_TYPE,
+                 PACKAGING_LEVEL,PRODUCT_DESCRIPTION,SKU
+  * part_info    row 1 is junk (1,2,3,4); real header is row 2
+                 (Part Number,Description,Part Type,Category); data from row 3.
+  * surgeon_info header row 1; a *record* is any row with a non-empty DistCode.
+                 Address-overflow rows have blank keys -> skip them.
 
-Bundled copies live in ``reference/`` so offline/dev and the test suite start warm
-without a live upload; the endpoint replaces them from an operator upload.
+Columns are matched by header NAME (not position), so column reordering between
+exports is tolerated. GTIN_14 is guarded against Excel dropping leading zeros.
 """
 from __future__ import annotations
 
@@ -18,17 +20,75 @@ import csv
 import io
 from pathlib import Path
 
+from openpyxl import load_workbook
+
 from app.db import db
 
 # Repo-bundled defaults (committed; product/surgeon data, no PHI).
 REFERENCE_DIR = Path(__file__).resolve().parents[2] / "reference"
 
 
-def _clean(v) -> str | None:
+def _cell_str(v) -> str | None:
+    """Stringify a cell from CSV or Excel without scientific notation, BOM, or
+    trailing '.0' on integer-valued floats (Excel reads numeric columns as float)."""
     if v is None:
         return None
-    s = str(v).strip().lstrip("﻿")  # strip stray BOM on first column
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        v = int(v) if v.is_integer() else v
+        return str(v)
+    s = str(v).strip().lstrip("﻿")
     return s or None
+
+
+def _clean(v) -> str | None:
+    return _cell_str(v)
+
+
+def _pad_gtin(v: str | None) -> str | None:
+    """Excel often stores GTIN_14 as a number, dropping leading zeros. A purely
+    numeric GTIN shorter than 14 digits is left-padded back to 14."""
+    s = _cell_str(v)
+    if s and s.isdigit() and len(s) < 14:
+        return s.zfill(14)
+    return s
+
+
+def _is_xlsx(data: bytes) -> bool:
+    # .xlsx is a zip; legacy .xls (OLE2) starts with the D0 CF magic.
+    return data[:2] == b"PK" or data[:4] == b"\xd0\xcf\x11\xe0"
+
+
+def _records(data: bytes, header_offset: int = 0, sheet: str | None = None) -> list[dict]:
+    """Load a table from CSV or Excel into header-keyed row dicts.
+
+    `header_offset` = number of leading rows before the header row (1 for the
+    junk row in part_info). For Excel, reads the named sheet or the first one.
+    """
+    if _is_xlsx(data):
+        wb = load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        ws = wb[sheet] if (sheet and sheet in wb.sheetnames) else wb[wb.sheetnames[0]]
+        grid = [list(r) for r in ws.iter_rows(values_only=True)]
+        wb.close()
+    else:
+        grid = list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))
+
+    if len(grid) <= header_offset:
+        return []
+    header = [_cell_str(c) for c in grid[header_offset]]
+    out: list[dict] = []
+    for raw in grid[header_offset + 1:]:
+        if not raw or all(c in (None, "") for c in raw):
+            continue
+        rec = {}
+        for i, h in enumerate(header):
+            if h:
+                rec[h] = _cell_str(raw[i]) if i < len(raw) else None
+        out.append(rec)
+    return out
 
 
 def _normalize_distcode(code: str | None) -> str | None:
@@ -48,14 +108,13 @@ def surgeon_key(last_name: str | None, dist_code: str | None) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Parsers (bytes -> list[dict] matching the table columns)
+# Parsers (CSV or Excel bytes -> list[dict] matching the table columns)
 # ---------------------------------------------------------------------------
 def parse_gtin_codes(data: bytes) -> list[dict]:
     rows: list[dict] = []
     seen: set[str] = set()
-    reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
-    for r in reader:
-        gtin = _clean(r.get("GTIN_14"))
+    for r in _records(data, header_offset=0):
+        gtin = _pad_gtin(r.get("GTIN_14"))
         if not gtin or gtin in seen:
             continue
         seen.add(gtin)
@@ -75,22 +134,16 @@ def parse_part_info(data: bytes) -> list[dict]:
     """Row 1 junk, row 2 header, data from row 3. Key = Part Number (exact)."""
     rows: list[dict] = []
     seen: set[str] = set()
-    all_rows = list(csv.reader(io.StringIO(data.decode("utf-8-sig"))))
-    if len(all_rows) < 3:
-        return rows
-    # all_rows[0] = junk, all_rows[1] = header, all_rows[2:] = data
-    for raw in all_rows[2:]:
-        if not raw:
-            continue
-        part = _clean(raw[0] if len(raw) > 0 else None)
+    for r in _records(data, header_offset=1):
+        part = _clean(r.get("Part Number"))
         if not part or part in seen:
             continue
         seen.add(part)
         rows.append({
             "part_number": part,
-            "description": _clean(raw[1] if len(raw) > 1 else None),
-            "part_type": _clean(raw[2] if len(raw) > 2 else None),
-            "category": _clean(raw[3] if len(raw) > 3 else None),
+            "description": _clean(r.get("Description")),
+            "part_type": _clean(r.get("Part Type")),
+            "category": _clean(r.get("Category")),
         })
     return rows
 
@@ -99,8 +152,7 @@ def parse_surgeon_info(data: bytes) -> list[dict]:
     """A record is any row with a non-empty DistCode; blank-key overflow rows skip."""
     rows: list[dict] = []
     seen: set[str] = set()
-    reader = csv.DictReader(io.StringIO(data.decode("utf-8-sig")))
-    for r in reader:
+    for r in _records(data, header_offset=0):
         dist = _normalize_distcode(r.get("DistCode"))
         last = _clean(r.get("Surgeon Last Name"))
         if not dist:
@@ -150,13 +202,18 @@ def ingest_masters(gtin: bytes | None = None,
 
 
 def load_bundled_masters() -> dict:
-    """Seed the reference masters from the repo-bundled CSVs (offline/dev/tests)."""
-    files = {
-        "gtin": REFERENCE_DIR / "GTIN_Codes.csv",
-        "part_info": REFERENCE_DIR / "part_info.csv",
-        "surgeon_info": REFERENCE_DIR / "surgeon_info.csv",
-    }
-    kwargs = {k: p.read_bytes() for k, p in files.items() if p.exists()}
+    """Seed the reference masters from the repo-bundled files (offline/dev/tests).
+
+    Prefers an Excel workbook if present (production format), else the CSV export.
+    """
+    stems = {"gtin": "GTIN_Codes", "part_info": "part_info", "surgeon_info": "surgeon_info"}
+    kwargs: dict = {}
+    for key, stem in stems.items():
+        for ext in (".xlsx", ".xls", ".csv"):
+            p = REFERENCE_DIR / f"{stem}{ext}"
+            if p.exists():
+                kwargs[key] = p.read_bytes()
+                break
     if not kwargs:
         return {"gtin_rows": None, "part_rows": None, "surgeon_rows": None}
     return ingest_masters(**kwargs)

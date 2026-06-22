@@ -1,11 +1,26 @@
 """Reference masters ingest + lookups (GTIN / part_info / surgeon crosswalks)."""
+import io
+
+from openpyxl import Workbook
+
 from app.db import db
 from app.learning.ingest_reference import (
     load_bundled_masters,
+    parse_gtin_codes,
     parse_part_info,
     parse_surgeon_info,
     surgeon_key,
 )
+
+
+def _xlsx(rows: list[list]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
 
 
 def test_bundled_masters_ingest_counts():
@@ -52,3 +67,32 @@ def test_gtin_and_part_lookups_after_ingest():
     # Trailing +/- in REFs are significant and preserved.
     p = db.part_info_for_ref("MO-HDAI-36/40-")
     assert p and p["part_type"] and p["category"]
+
+
+def test_excel_masters_parse_like_csv():
+    """Production masters are Excel; the loader must accept .xlsx too."""
+    g = parse_gtin_codes(_xlsx([
+        ["STATUS", "GTIN_14", "GTIN_12_UPC", "PACKAGING_TYPE", "PACKAGING_LEVEL",
+         "PRODUCT_DESCRIPTION", "SKU"],
+        ["In Use", 810008120088, 811, "Regular", "Each", "Shell", "MO-MSFC-56/MH"],
+    ]))
+    # Excel stores GTIN_14 as a number; leading zeros must be restored to 14.
+    assert g[0]["gtin_14"] == "00810008120088"
+    assert g[0]["sku"] == "MO-MSFC-56/MH"
+
+    p = parse_part_info(_xlsx([
+        [1, 2, 3, 4],
+        ["Part Number", "Description", "Part Type", "Category"],
+        ["MO-HDAI-36/40-", "Ceramic Head", "Libertas Head", "Head"],
+    ]))
+    assert p == [{"part_number": "MO-HDAI-36/40-", "description": "Ceramic Head",
+                  "part_type": "Libertas Head", "category": "Head"}]
+
+    s = parse_surgeon_info(_xlsx([
+        ["Surgeon-DistCode", "Surgeon Last Name", "DistCode", "Status",
+         "Surgeon Full Name", "Hospital", "Region"],
+        ["MontijoMC-001", "Montijo", "MC-001", "Active", "Harvey Montijo",
+         "Wellington", "South"],
+        [None, None, None, None, None, None, None],  # address overflow -> skipped
+    ]))
+    assert len(s) == 1 and s[0]["surgeon_distcode"] == "MONTIJOMC-001"

@@ -229,8 +229,9 @@ async def reference_log(file: UploadFile = File(...)):
 
 @app.post("/reference/masters")
 async def reference_masters(files: list[UploadFile] = File(...)):
-    """Full-replace the product/surgeon masters. Routes each CSV by filename:
-    GTIN_Codes.csv, part_info.csv, surgeon_info.csv (any subset accepted)."""
+    """Full-replace the product/surgeon masters. Accepts Excel (.xlsx, the
+    production format) or CSV, routed by filename: GTIN_Codes, part_info,
+    surgeon_info (any subset accepted)."""
     from app.learning.ingest_reference import ingest_masters
 
     kwargs: dict = {}
@@ -245,8 +246,8 @@ async def reference_masters(files: list[UploadFile] = File(...)):
             kwargs["surgeon_info"] = data
     if not kwargs:
         return JSONResponse(
-            {"detail": "No recognized masters file (expect GTIN_Codes.csv, "
-                       "part_info.csv, surgeon_info.csv)."},
+            {"detail": "No recognized masters file (expect GTIN_Codes, part_info, "
+                       "surgeon_info as .xlsx or .csv)."},
             status_code=400,
         )
     loop = get_event_loop()

@@ -4,6 +4,11 @@ Full-replaced on each upload via `POST /reference/masters` and **seeded on
 startup** from these bundled copies if the datastore has none. Product/surgeon
 master data — **no patient PHI**. See `docs/EXTRACTION_FIELD_GUIDE.md` §2.
 
+> In production these are **Excel** workbooks (same as the Expiry Log). The upload
+> endpoint and startup seed accept either `.xlsx` or `.csv`; the copies committed
+> here are CSV exports (lighter for git/tests). Columns are matched by header
+> **name**, and `GTIN_14` is re-padded to 14 digits if Excel dropped leading zeros.
+
 | File | Key | Provides |
 |------|-----|----------|
 | `GTIN_Codes.csv` | `GTIN_14` (decoded `(01)`) | `SKU` (= Ref Number), `PRODUCT_DESCRIPTION`, `STATUS` |

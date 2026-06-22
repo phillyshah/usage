@@ -20,7 +20,10 @@ Major: re-targets the output and extraction to the distributor-label handoff spe
     DistCode` (~559 records; address-overflow rows skipped)
   - New tables `reference_gtin`, `reference_part_info`, `reference_surgeons`,
     `masters_ingests` (`db/09_reference_masters.sql`); seeded on startup from the
-    bundled CSVs, re-uploadable via `POST /reference/masters`.
+    bundled copies, re-uploadable via `POST /reference/masters`.
+  - Ingest accepts **Excel (.xlsx, the production format) or CSV**; columns are
+    matched by header name and `GTIN_14` leading zeros are restored if Excel
+    stored it as a number.
 - **New "Usage" deliverable sheet** — the flat, one-row-per-unit output: the 26
   `reference/output_columns.csv` columns in order, led by `Source Image Filename`,
   plus a trailing `Notes` aid. Device columns are **joins, not reads** (GTIN→SKU→
