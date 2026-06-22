@@ -202,6 +202,13 @@ class Database:
         row.setdefault("ingested_at", _now_iso())
         return self.backend.insert("log_ingests", row)
 
+    def latest_log_ingest(self) -> dict | None:
+        """Most recent Expiry Log ingest (for the 'last updated' indicator)."""
+        rows = self.backend.select("log_ingests")
+        if not rows:
+            return None
+        return max(rows, key=lambda r: r.get("ingested_at") or "")
+
     def reference_lots(self) -> list[dict]:
         return self.backend.select("reference_lots")
 

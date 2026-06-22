@@ -412,22 +412,29 @@ a { color: var(--teal-600); }
 .whats-new-btn:focus-visible { box-shadow: var(--focus); outline: none; }
 
 /* ----------------------- Changelog modal ------------------------------- */
+/* Plain overlay: full-screen tint + centered card. Toggled via the [hidden]
+   attribute, so there are no <dialog> user-agent quirks to fight. */
 .changelog-modal {
-  border: none;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-4);
+  background: rgba(22,36,43,.45);
+}
+.changelog-modal[hidden] { display: none; }
+.changelog-inner {
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
   border-radius: var(--r-lg);
   box-shadow: 0 8px 40px rgba(22,36,43,.18);
-  padding: 0;
-  width: min(560px, calc(100vw - 2rem));
+  width: min(560px, 100%);
   max-height: min(80vh, 600px);
   overflow: hidden;
-  flex-direction: column;
 }
-/* A native <dialog> is display:none until opened. Only flex it WHILE open,
-   otherwise the base display would override the UA's hidden state and the
-   modal could never be closed. */
-.changelog-modal[open] { display: flex; }
-.changelog-modal::backdrop { background: rgba(22,36,43,.45); }
-.changelog-inner { display: flex; flex-direction: column; height: 100%; }
 .changelog-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: var(--s-5) var(--s-6);
@@ -456,6 +463,21 @@ a { color: var(--teal-600); }
 .cl-date { font-size: .85rem; color: var(--ink-500); }
 .cl-notes { display: flex; flex-direction: column; gap: var(--s-2); padding-left: var(--s-4); list-style: disc; }
 .cl-notes li { font-size: .95rem; color: var(--ink-700); }
+
+/* ----------------------- Reference log status -------------------------- */
+.ref-status:empty { display: none; }
+.ref-status {
+  display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap;
+  margin: 0 0 var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  background: var(--teal-050);
+  border: 1px solid var(--teal-100);
+  border-radius: var(--r-sm);
+  font-size: .85rem; color: var(--ink-700);
+}
+.ref-status .ref-status-when { font-weight: 600; color: var(--teal-700); }
+.ref-status .ref-status-counts { color: var(--ink-500); }
+.ref-status.is-empty { background: var(--bg); border-color: var(--line); color: var(--ink-500); }
 
 /* ----------------------------- Responsive ------------------------------ */
 @media (max-width: 860px) {

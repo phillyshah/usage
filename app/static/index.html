@@ -42,8 +42,11 @@
   </header>
 
   <!-- ===================== WHAT'S NEW MODAL ===================== -->
-  <dialog id="whats-new-modal" class="changelog-modal" aria-labelledby="changelog-title">
-    <div class="changelog-inner">
+  <!-- Plain overlay (not <dialog>) so showing/hiding is a simple class toggle
+       with no user-agent display quirks. -->
+  <div id="whats-new-modal" class="changelog-modal" role="dialog" aria-modal="true"
+       aria-labelledby="changelog-title" hidden>
+    <div class="changelog-inner" role="document">
       <div class="changelog-head">
         <h2 class="changelog-title" id="changelog-title">What's New</h2>
         <button type="button" id="whats-new-close" class="changelog-close" aria-label="Close">
@@ -54,7 +57,7 @@
         <p class="muted-note">Loading…</p>
       </div>
     </div>
-  </dialog>
+  </div>
 
   <!-- ===================== HELP PANEL ===================== -->
   <section class="container help-wrap">
@@ -255,6 +258,8 @@
       <section class="card secondary-card" aria-labelledby="ref-title">
         <h2 class="secondary-title" id="ref-title">Update the reference log</h2>
         <p class="step-help">Optional. Upload the latest Expiry Log spreadsheet so the tool has the newest device information.</p>
+
+        <div id="reference-status" class="ref-status" aria-live="polite"></div>
 
         <form id="reference-form" class="step-body">
           <label class="dropzone dropzone-sm" id="reference-dropzone" for="reference-input" tabindex="0"

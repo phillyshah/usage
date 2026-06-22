@@ -5,6 +5,38 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.3.0] — 2026-06-22
+
+### Added
+- **New "Usage" output sheet** — the flat, one-row-per-line deliverable with the
+  exact accountant columns: `File`, `Reload Code`, `Surgeon Name`,
+  `Distributor Code`, `Surgery Date`, `Surgery Month`, `Year`, `Hospital Name`,
+  `Quantity`, `Price`, `Lot Number`, `Reference Number`, `Expiration Date`, `Notes`.
+  Confidence coloring (white/amber/red) carries over per field. The `Tickets`
+  sheet is kept for header-level reconciliation; the corrections round-trip reads
+  the `Usage` sheet (and still accepts the legacy `Line Items` layout).
+- **`File` column** — traces each row back to the source photo, using the uploaded
+  file's name (e.g. `MO083596.jpg` → `MO083596`). Stored as `tickets.source_filename`.
+- **`Surgery Month` / `Year`** — derived from the surgery date for easy grouping.
+- **Reference-log "last updated" banner** on the main screen, backed by a new
+  `GET /reference/status` endpoint (date + parts/lots counts).
+
+### Fixed
+- **What's New window** no longer gets stuck. Replaced the native `<dialog>` (whose
+  user-agent display rules caused it to either never close or never show) with a
+  plain overlay toggled by the `hidden` attribute. Closes via X, Esc, or clicking
+  the backdrop.
+
+### Migration
+- Run `db/08_add_source_filename.sql` in Supabase (adds `tickets.source_filename`)
+  before deploying. Safe to run more than once.
+
+### Mapping notes
+- `Reload Code` and `Distributor Code` are both pre-filled from the ticket's single
+  Rep/Distributor Code (e.g. `GR-ME-001`); `Distributor Code` is a starting point
+  for the "must match surgeon" check.
+- `Surgery Month` is the month name (e.g. "June").
+
 ## [1.2.0] — 2026-06-22
 
 ### Fixed / Changed
