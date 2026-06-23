@@ -114,6 +114,13 @@ class _LocalBackend:
         with self._lock:
             self._write(table, list(rows))
 
+    def delete_where(self, table: str, column: str, value: Any) -> int:
+        with self._lock:
+            rows = self._read(table)
+            kept = [r for r in rows if r.get(column) != value]
+            self._write(table, kept)
+            return len(rows) - len(kept)
+
     def select(self, table: str) -> list[dict]:
         with self._lock:
             return self._read(table)
@@ -209,6 +216,10 @@ class _SupabaseBackend:
                      .order(stamp_col, desc=True).limit(1).execute())
         stamp = (stamp_res.data or [{}])[0].get(stamp_col)
         return {"rows": n, "updated_at": stamp}
+
+    def delete_where(self, table: str, column: str, value: Any) -> int:
+        res = self.client.table(table).delete().eq(column, value).execute()
+        return len(res.data or [])
 
     def find_all(self, table: str, column: str, value: Any) -> list[dict]:
         # Predicate pushed to Postgres — never the 1000-row select() cap, and it
@@ -519,6 +530,12 @@ class Database:
 
     def lines_for_ticket(self, ticket_id: str) -> list[dict]:
         return self.backend.find_all("line_items", "ticket_id", ticket_id)
+
+    def clear_ticket_extractions(self, ticket_id: str) -> None:
+        """Remove a ticket's line items + field snapshots so re-processing is
+        idempotent (re-running Extract must replace, not append/duplicate)."""
+        self.backend.delete_where("line_items", "ticket_id", ticket_id)
+        self.backend.delete_where("field_extractions", "ticket_id", ticket_id)
 
     # ---- field extractions (per-field snapshot) ----
     def add_field_extraction(self, row: dict) -> None:

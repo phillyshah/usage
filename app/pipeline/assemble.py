@@ -81,6 +81,9 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     Returns a summary {ticket_id, line_count, flags}.
     """
     ticket_id = ticket_row["ticket_id"]
+    # Idempotent re-processing: drop any prior line items + field snapshots for
+    # this ticket so a re-run replaces them instead of stacking duplicates.
+    db.clear_ticket_extractions(ticket_id)
     vheader = vision.get("header", {}) if vision else {}
     vlines = vision.get("lines", []) if vision else []
 
