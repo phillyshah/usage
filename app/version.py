@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.2.1",
+        "date": "2026-06-23",
+        "notes": [
+            "Fixed the main reason recent spreadsheets came out blank: the data "
+            "was being extracted and saved correctly, but a database read limit "
+            "was dropping it before it reached the spreadsheet once enough tickets "
+            "had been processed — every value is now read back in full",
+            "This also restores the colour confidence shading and the Raw "
+            "Extraction tab for all tickets",
+        ],
+    },
     {
         "version": "2.2.0",
         "date": "2026-06-23",
