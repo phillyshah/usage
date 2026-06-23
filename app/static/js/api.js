@@ -112,6 +112,11 @@ export const api = {
     return `/batches/${encodeURIComponent(batchId)}/sheet`;
   },
 
+  /** DELETE /batches/{id} -> permanently remove a batch + its tickets/images. */
+  deleteBatch(batchId) {
+    return request(`/batches/${encodeURIComponent(batchId)}`, { method: "DELETE" });
+  },
+
   /**
    * POST /corrections/upload (multipart, field "files")
    * -> 200 {processed, tickets_matched, tickets_unknown}

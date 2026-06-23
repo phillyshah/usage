@@ -52,8 +52,8 @@ For each device label, read the PRINTED catalogue/reference number and lot:
   - "lot": the lot/batch number printed on the label (usually labelled "LOT").
   - "unit_price": the HANDWRITTEN price written near that label, in or next to the
     "Price" box. See the price rules below.
-  - "wasted": true if a handwritten "W" or "wasted" appears near the component
-    (the item is still used — just mark it); otherwise false.
+  - "wasted": true if a handwritten "W", "wasted", or "I/O" appears near the
+    component (the item is still used — just mark it); otherwise false.
 Read these from the printed label text even when a barcode is present. Do NOT
 provide a description — that is looked up separately from the reference tables.
 

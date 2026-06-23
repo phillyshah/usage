@@ -137,23 +137,40 @@ async def upload_images(files: list[UploadFile] = File(...)):
     for f in files:
         payloads.append((await f.read(), f.filename or ""))
 
-    def _ingest_one(data: bytes, filename: str) -> dict:
-        # Isolate each file: one bad photo (decode/storage/schema error) must not
-        # fail the whole upload. Failures come back as a per-file "error" status.
+    def _ingest_one(data: bytes, filename: str) -> list[dict]:
+        # Isolate each upload: one bad file (decode/render/storage error) must not
+        # fail the whole batch. A PDF expands to one ticket PER PAGE (multi-page
+        # PDFs carry one surgery's ticket per page); an image is a single ticket.
+        # Returns a list of per-ticket result dicts (flattened by the caller).
+        from app.pipeline import pdf
+
         try:
+            if pdf.is_pdf(data):
+                pages = pdf.pdf_to_page_images(data)
+                if not pages:
+                    raise ValueError("Could not read this PDF (it may be empty or corrupt).")
+                stem = (filename or "ticket").rsplit(".", 1)[0]
+                out = []
+                for n, page_bytes in enumerate(pages, start=1):
+                    page_name = f"{stem}-p{n}"
+                    r = ingest_image(page_bytes, page_name, batch["id"])
+                    out.append({"ticket_id": r["ticket_id"], "status": r["status"],
+                                "filename": page_name})
+                return out
             r = ingest_image(data, filename, batch["id"])
-            return {"ticket_id": r["ticket_id"], "status": r["status"], "filename": filename}
+            return [{"ticket_id": r["ticket_id"], "status": r["status"], "filename": filename}]
         except Exception as exc:
             log.exception("ingest failed for %s", filename)
-            return {"ticket_id": None, "status": "error", "filename": filename,
-                    "error": _explain_db_error(exc)}
+            return [{"ticket_id": None, "status": "error", "filename": filename,
+                     "error": _explain_db_error(exc)}]
 
     loop = get_event_loop()
-    results = await gather(*[
+    grouped = await gather(*[
         loop.run_in_executor(_executor, _ingest_one, data, name)
         for data, name in payloads
     ])
-    return {"batch_id": batch["id"], "tickets": list(results)}
+    tickets = [t for group in grouped for t in group]  # flatten pages
+    return {"batch_id": batch["id"], "tickets": tickets}
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +194,43 @@ def list_batches():
             "status": b.get("status"),
         })
     return out
+
+
+@app.delete("/batches/{batch_id}")
+def delete_batch(batch_id: str):
+    """Permanently delete a batch and everything it produced: its tickets, their
+    line items + field snapshots, the stored redacted images, and the output
+    sheet. Backs the UI "Start over", which wipes the session's work."""
+    from app.storage import delete_object, split_ref
+
+    batch = db.get_batch(batch_id)
+    if not batch:
+        return JSONResponse({"error": "batch not found"}, status_code=404)
+
+    tickets = db.tickets_for_batch(batch_id)
+    images_removed = 0
+    for t in tickets:
+        ref = t.get("source_image_path")
+        if ref:
+            try:
+                bucket, path = split_ref(ref)
+                delete_object(bucket, path)
+                images_removed += 1
+            except Exception as exc:  # non-fatal: keep purging the rest
+                log.warning("could not delete redacted image %s: %s", ref, exc)
+        db.clear_ticket_extractions(t["ticket_id"])  # line_items + field_extractions
+
+    db.delete_tickets_for_batch(batch_id)
+    sheet = batch.get("output_sheet_path")
+    if sheet:
+        try:
+            bucket, path = split_ref(sheet)
+            delete_object(bucket, path)
+        except Exception as exc:
+            log.warning("could not delete output sheet %s: %s", sheet, exc)
+    db.delete_batch(batch_id)
+    return {"deleted_batch": batch_id, "tickets_deleted": len(tickets),
+            "images_removed": images_removed}
 
 
 @app.get("/batches/{batch_id}/sheet")

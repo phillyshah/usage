@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.5.0",
+        "date": "2026-06-23",
+        "notes": [
+            "You can now upload PDF tickets, not just photos. A multi-page PDF is "
+            "treated as one ticket per page, so a single PDF holding several "
+            "surgeries is split into the right number of tickets automatically",
+            "A handwritten 'I/O' is now recognized as wasted (same as 'W')",
+            "Fixed the 'Clear list' button in step 1 — it now properly clears your "
+            "staged files and the result message",
+            "Added a 'Start over' button that wipes the current session — your "
+            "uploaded tickets and generated spreadsheet — and returns you to step "
+            "1, after a confirmation prompt",
+            "The Usage sheet now ends at Expiry Date (column M), with the Notes "
+            "review column alongside it; the unused columns after it were removed",
+        ],
+    },
     {
         "version": "2.4.0",
         "date": "2026-06-23",

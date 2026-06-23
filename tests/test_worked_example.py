@@ -107,9 +107,9 @@ def test_usage_sheet_has_contract_columns_and_joined_values():
 
     ws = wb["Usage"]
     headers = [c.value for c in ws[1]]
-    # First 27 columns are the exact contract (Source Image Filename + 26).
-    assert headers[:27] == OUTPUT_CONTRACT_COLUMNS
-    assert headers[27] == "Notes"
+    # The deliverable contract is now columns A..M (through Expiry Date).
+    assert headers[:13] == OUTPUT_CONTRACT_COLUMNS
+    assert headers[13] == "Notes"
 
     rows = list(ws.iter_rows(min_row=2, values_only=True))
     assert len(rows) == 6
@@ -119,10 +119,17 @@ def test_usage_sheet_has_contract_columns_and_joined_values():
         assert r[col["Reload Code"]] is None            # not used
         assert r[col["Quantity"]] == 1                  # one row per unit
         assert r[col["Hospital"]] == EXPECTED_HOSPITAL  # surgeon_info lookup
-        assert r[col["Region"]] == EXPECTED_REGION
         assert r[col["Surgeon"]] == HEADER["surgeon"]
         assert r[col["Month"]] == 6 and r[col["Year"]] == 2026
         assert r[col["Ref Number"]] in {e["ref"] for e in EXPECTED_LINES}
-        assert r[col["Description"]]                     # part_info lookup
-        assert r[col["Part Type"]] and r[col["Category"]]
-        assert r[col["SAP Part Number"]] is None        # deferred/blank
+
+    # The dropped device attributes (Description/Part Type/Category) live on the
+    # Line Items sheet now, not Usage.
+    li = wb["Line Items"]
+    li_headers = [c.value for c in li[1]]
+    li_col = {h: i for i, h in enumerate(li_headers)}
+    li_rows = list(li.iter_rows(min_row=2, values_only=True))
+    assert len(li_rows) == 6
+    for r in li_rows:
+        assert r[li_col["Ref Number"]] in {e["ref"] for e in EXPECTED_LINES}
+        assert r[li_col["Description"]]                  # part_info lookup

@@ -8,14 +8,12 @@ from app.db import db
 from app.pipeline.assemble import assemble_and_persist
 from app.sheets.write import OUTPUT_CONTRACT_COLUMNS, write_review_workbook
 
-# Source Image Filename + the 26 output_columns.csv columns, in order.
+# The deliverable contract is now exactly columns A..M (through Expiry Date).
+# Everything that used to follow lives on the Line Items sheet, not Usage.
 EXPECTED_CONTRACT = [
     "Source Image Filename", "Reload Code", "Surgeon", "DistCode", "Date", "Month",
     "Year", "Hospital", "Quantity", "Price", "Lot Number", "Ref Number",
-    "Expiry Date", "Invoice No.", "Invoice Date", "SurgeonName", "Distributor",
-    "Distributor Rep", "Sales Rep", "Maxx Sales Manager", "Distributing Company",
-    "Distributor Code", "Region", "Description", "Part Type", "Category",
-    "SAP Part Number",
+    "Expiry Date",
 ]
 
 
@@ -63,8 +61,8 @@ def test_usage_row_values_and_joins():
     assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Raw Extraction", "Legend"]
     ws = wb["Usage"]
     headers = [c.value for c in ws[1]]
-    assert headers[:27] == EXPECTED_CONTRACT
-    assert headers[27] == "Notes"
+    assert headers[:13] == EXPECTED_CONTRACT
+    assert headers[13] == "Notes"
 
     row = {h: ws.cell(row=2, column=i + 1).value for i, h in enumerate(headers)}
     assert row["Source Image Filename"] == "MO083596"   # extension stripped
@@ -74,17 +72,17 @@ def test_usage_row_values_and_joins():
     assert row["Date"] == "06/01/2026"                   # MM/DD/YYYY
     assert row["Month"] == 6 and row["Year"] == 2026     # numeric
     assert row["Hospital"] == "Sierra Medical"           # surgeon_info lookup
-    assert row["SurgeonName"] == "Avery Woodworth"
-    assert row["Distributor Code"] == "GR-ME-001"        # canonical lookup
-    assert row["Region"] == "West"
     assert row["Quantity"] == 1
     assert row["Price"] == 600
     assert row["Ref Number"] == "USG-REF-1"
     assert row["Lot Number"] == "L900"
-    assert row["Description"] == "Widget Deluxe"
-    assert row["Part Type"] == "Gadget"
-    assert row["Category"] == "Hardware"
-    assert row["SAP Part Number"] is None                # deferred
+
+    # The device/surgeon attributes dropped from Usage now live on Line Items.
+    li = wb["Line Items"]
+    li_headers = [c.value for c in li[1]]
+    li_row = {h: li.cell(row=2, column=i + 1).value for i, h in enumerate(li_headers)}
+    assert li_row["Ref Number"] == "USG-REF-1"
+    assert li_row["Description"] == "Widget Deluxe"
 
 
 def test_unmatched_surgeon_leaves_lookups_blank_and_red():
