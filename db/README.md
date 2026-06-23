@@ -18,6 +18,15 @@ order**:
 
 Prereq: enable **pg_cron** first (Database → Extensions) so script 06 succeeds.
 
+> **Migrations 08+ are incremental.** If you set the project up before these
+> existed, the app code expects them — run any you've missed. They're all
+> idempotent (`add column if not exists` / `create table if not exists`), so
+> re-running is safe. The app now **detects un-applied migrations**: it logs a
+> `SCHEMA DRIFT` line at startup and `GET /diag` returns `schema_ok` /
+> `schema_problems` naming the exact file to run. Uploads also degrade
+> gracefully — a missing column fails just that file with an actionable message
+> instead of 500-ing the whole request.
+
 After 09, verify you have **19 tables**:
 
 ```sql

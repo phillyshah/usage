@@ -280,19 +280,21 @@ function renderUploadResult(data) {
   if (data && data.batch_id) state.lastBatchId = data.batch_id;
 
   const manual = tickets.filter((t) => t.status === "manual_queue");
+  const failed = tickets.filter((t) => t.status === "error");
+  const ok = tickets.filter((t) => t.status !== "error");
   const body = [];
   body.push(el("p", { class: "notice-text",
-    text: `${pluralize(tickets.length, "ticket")} received and ready for step 2.` }));
+    text: `${pluralize(ok.length, "ticket")} received and ready for step 2.` }));
 
   const list = el("ul", { class: "ticket-list" });
   for (const t of tickets) {
-    const isManual = t.status === "manual_queue";
+    const kind = t.status === "manual_queue" ? "manual"
+      : t.status === "error" ? "error" : "review";
+    const label = kind === "manual" ? "Needs a person"
+      : kind === "error" ? "Couldn't upload" : "Ready to review";
     list.append(el("li", { class: "ticket-row" }, [
-      el("span", { class: "ticket-id", text: t.ticket_id || "Ticket" }),
-      el("span", {
-        class: `tag ${isManual ? "tag-manual" : "tag-review"}`,
-        text: isManual ? "Needs a person" : "Ready to review",
-      }),
+      el("span", { class: "ticket-id", text: t.ticket_id || t.filename || "Ticket" }),
+      el("span", { class: `tag tag-${kind}`, text: label }),
     ]));
   }
   body.push(list);
@@ -302,8 +304,17 @@ function renderUploadResult(data) {
       `<strong>${pluralize(manual.length, "ticket")}</strong> couldn't be cleared of patient information automatically, so ${manual.length === 1 ? "it has" : "they have"} been set aside for a person to handle. Nothing is lost — just let your team lead know.` }));
   }
 
-  renderNotice(uploadResult, tickets.length ? "success" : "info",
-    tickets.length ? "Tickets received" : "No tickets were read", body);
+  if (failed.length > 0) {
+    const detail = failed.find((t) => t.error)?.error;
+    body.push(el("p", { class: "notice-text", html:
+      `<strong>${pluralize(failed.length, "photo")}</strong> couldn't be uploaded${detail ? ` — ${detail}` : "."} The other photos were unaffected.` }));
+  }
+
+  const kind = failed.length && !ok.length ? "error"
+    : failed.length ? "warn" : ok.length ? "success" : "info";
+  renderNotice(uploadResult, kind,
+    ok.length ? "Tickets received" : failed.length ? "Upload had problems" : "No tickets were read",
+    body);
 }
 
 /* ===================================================================== *

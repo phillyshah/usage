@@ -292,6 +292,7 @@ a { color: var(--teal-600); }
 }
 .tag-review { background: var(--green-050); color: var(--green-600); }
 .tag-manual { background: var(--amber-cell); color: #8a6d00; }
+.tag-error { background: var(--red-050, #fdecec); color: var(--red-600, #b42318); }
 
 .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-3); }
 .stat {

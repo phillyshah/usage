@@ -9,7 +9,7 @@ from __future__ import annotations
 import io
 import logging
 import traceback
-from asyncio import get_event_loop
+from asyncio import gather, get_event_loop
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,6 +46,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # pragma: no cover - never block startup on seeding
         log.warning("Reference masters seed skipped: %s", exc)
 
+    # Surface schema drift (a migration in db/ that was never applied) at startup
+    # so it is obvious in the logs instead of 500-ing the first live request.
+    try:
+        problems = db.schema_check()
+        if problems:
+            for p in problems:
+                log.error("SCHEMA DRIFT: %s.%s missing — run %s in Supabase",
+                          p["table"], p["column"], p["migration"])
+    except Exception as exc:  # pragma: no cover - never block startup on the probe
+        log.warning("Schema check skipped: %s", exc)
+
     # Start the scheduler only with a real datastore (skip in offline dev).
     if not db.offline:
         start_scheduler()
@@ -55,7 +66,7 @@ async def lifespan(app: FastAPI):
     shutdown_scheduler()
 
 
-_executor = ThreadPoolExecutor(max_workers=2)
+_executor = ThreadPoolExecutor(max_workers=4)
 
 app = FastAPI(title="Usage — Label Extraction", version=VERSION, lifespan=lifespan)
 
@@ -83,14 +94,31 @@ def diag():
         role = detect_key_role(settings.supabase_service_key) or "unknown"
         info["key_role"] = role
         info["key_ok"] = role == "service_role"
+        problems = db.schema_check()
+        info["schema_ok"] = not problems
+        if problems:
+            info["schema_problems"] = problems
     return info
 
 
-def _explain_ingest_error(exc: Exception) -> str:
+def _explain_db_error(exc: Exception) -> str:
     """Turn raw datastore errors into operator-actionable messages."""
     msg = str(exc)
+    if "PGRST204" in msg or "PGRST205" in msg or "schema cache" in msg:
+        return ("The database is missing a column or table the app expects. Run the "
+                "pending migrations in db/ (e.g. db/08_add_source_filename.sql, "
+                "db/09_reference_masters.sql) in the Supabase SQL editor, then retry.")
     if "42501" in msg or "row-level security" in msg:
         return f"Supabase rejected the write (row-level security). {WRONG_KEY_HELP}"
+    return f"Could not process the request: {exc}"
+
+
+def _explain_ingest_error(exc: Exception) -> str:
+    """Expiry-Log-flavored wrapper around the shared DB error explainer."""
+    msg = str(exc)
+    if "PGRST204" in msg or "PGRST205" in msg or "schema cache" in msg or \
+       "42501" in msg or "row-level security" in msg:
+        return _explain_db_error(exc)
     return f"Could not process the Expiry Log: {exc}"
 
 
@@ -100,12 +128,32 @@ def _explain_ingest_error(exc: Exception) -> str:
 @app.post("/images", status_code=202)
 async def upload_images(files: list[UploadFile] = File(...)):
     batch = db.create_batch()
-    results = []
+
+    # Read every upload into memory first (UploadFile.read is async/sequential),
+    # then ingest concurrently on the thread pool — cv2 and the Supabase client
+    # release the GIL, so multi-file uploads finish in roughly wall-clock/parallel
+    # time instead of summed sequentially.
+    payloads: list[tuple[bytes, str]] = []
     for f in files:
-        data = await f.read()  # raw bytes held in memory only
-        result = ingest_image(data, f.filename or "", batch["id"])
-        results.append({"ticket_id": result["ticket_id"], "status": result["status"]})
-    return {"batch_id": batch["id"], "tickets": results}
+        payloads.append((await f.read(), f.filename or ""))
+
+    def _ingest_one(data: bytes, filename: str) -> dict:
+        # Isolate each file: one bad photo (decode/storage/schema error) must not
+        # fail the whole upload. Failures come back as a per-file "error" status.
+        try:
+            r = ingest_image(data, filename, batch["id"])
+            return {"ticket_id": r["ticket_id"], "status": r["status"], "filename": filename}
+        except Exception as exc:
+            log.exception("ingest failed for %s", filename)
+            return {"ticket_id": None, "status": "error", "filename": filename,
+                    "error": _explain_db_error(exc)}
+
+    loop = get_event_loop()
+    results = await gather(*[
+        loop.run_in_executor(_executor, _ingest_one, data, name)
+        for data, name in payloads
+    ])
+    return {"batch_id": batch["id"], "tickets": list(results)}
 
 
 # ---------------------------------------------------------------------------

@@ -48,16 +48,41 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
         log.info("ticket %s routed to manual_queue (%s)", ticket["ticket_id"], filename)
         return {"ticket_id": ticket["ticket_id"], "status": "manual_queue"}
 
-    # Store ONLY the redacted image.
+    # Encode the redacted image BEFORE persisting anything. If encoding fails we
+    # cannot prove the stored bytes are masked, so we must never fall back to the
+    # raw upload (that would leak PHI). Fail safe to manual_queue, store nothing.
+    redacted_bytes = preprocess.encode_image(redacted, ".jpg")
+    if not redacted_bytes:
+        ticket = db.create_ticket({
+            "batch_id": batch_id,
+            "source_image_path": None,
+            "source_filename": filename or None,
+            "entity": template,
+            "status": "manual_queue",
+            "flags": ["Could not encode a redacted image — manual review required"],
+        })
+        log.info("ticket %s routed to manual_queue (encode failed, %s)",
+                 ticket["ticket_id"], filename)
+        return {"ticket_id": ticket["ticket_id"], "status": "manual_queue"}
+
+    # Store ONLY the redacted image. If the store fails, flip the ticket to
+    # manual_queue (rather than leave a pending ticket pointing at nothing) and
+    # let the caller report the failure.
     ticket = db.create_ticket({
         "batch_id": batch_id,
         "entity": template,
         "source_filename": filename or None,
         "status": "pending_review",
     })
-    redacted_bytes = preprocess.encode_image(redacted, ".jpg") or data
-    path = f"{ticket['ticket_id']}.jpg"
-    ref = put_object(REDACTED_IMAGES, path, redacted_bytes, "image/jpeg")
+    try:
+        ref = put_object(REDACTED_IMAGES, f"{ticket['ticket_id']}.jpg",
+                         redacted_bytes, "image/jpeg")
+    except Exception:
+        db.update_ticket(ticket["ticket_id"], {
+            "status": "manual_queue",
+            "flags": ["Could not store the redacted image — manual review required"],
+        })
+        raise
     db.update_ticket(ticket["ticket_id"], {"source_image_path": ref})
     return {"ticket_id": ticket["ticket_id"], "status": "pending_review"}
 

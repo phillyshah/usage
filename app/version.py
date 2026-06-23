@@ -5,9 +5,23 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.1.0"
+VERSION = "2.1.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.1.1",
+        "date": "2026-06-23",
+        "notes": [
+            "Uploading tickets is now resilient: if one photo can't be processed, "
+            "the rest still go through and the page tells you exactly which one "
+            "failed and why — instead of the whole upload erroring out",
+            "Photos in an upload are now processed in parallel, so a batch of "
+            "tickets finishes noticeably faster",
+            "Hardened the patient-privacy gate: a ticket image is only ever stored "
+            "after its patient sticker is confirmed masked — there is no path that "
+            "could store an unredacted photo",
+        ],
+    },
     {
         "version": "2.1.0",
         "date": "2026-06-23",
