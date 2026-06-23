@@ -5,6 +5,7 @@ from openpyxl import Workbook
 
 from app.db import db
 from app.learning.ingest_reference import (
+    bundled_as_of,
     load_bundled_masters,
     parse_gtin_codes,
     parse_part_info,
@@ -52,6 +53,15 @@ def test_surgeon_overflow_rows_skipped():
     assert len(rows) == 1
     assert rows[0]["surgeon_distcode"] == "SMITHAB-001"
     assert rows[0]["hospital"] == "Mercy Hospital"
+
+
+def test_bundled_masters_stamped_with_snapshot_date():
+    """The bundled seed records the snapshot's as-of date (reference/MASTERS_VERSION),
+    not the load time, so the freshness banner reflects the data date."""
+    load_bundled_masters()
+    latest = db.latest_masters_ingest()
+    assert latest["ingested_at"] == bundled_as_of()
+    assert bundled_as_of().startswith("2026-06-23")
 
 
 def test_surgeon_key_normalizes():

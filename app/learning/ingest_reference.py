@@ -182,8 +182,14 @@ def parse_surgeon_info(data: bytes) -> list[dict]:
 # ---------------------------------------------------------------------------
 def ingest_masters(gtin: bytes | None = None,
                    part_info: bytes | None = None,
-                   surgeon_info: bytes | None = None) -> dict:
-    """Full-replace whichever masters are supplied. Returns per-table row counts."""
+                   surgeon_info: bytes | None = None,
+                   as_of: str | None = None) -> dict:
+    """Full-replace whichever masters are supplied. Returns per-table row counts.
+
+    `as_of` stamps the ingest with the data's effective date (e.g. the bundled
+    monthly snapshot date) instead of the load time; operator uploads leave it
+    None so the upload time is used.
+    """
     summary = {"gtin_rows": None, "part_rows": None, "surgeon_rows": None}
     if gtin is not None:
         g = parse_gtin_codes(gtin)
@@ -197,8 +203,24 @@ def ingest_masters(gtin: bytes | None = None,
         s = parse_surgeon_info(surgeon_info)
         db.replace_reference_surgeons(s)
         summary["surgeon_rows"] = len(s)
-    db.log_masters_ingest(summary.copy())
+    row = summary.copy()
+    if as_of:
+        row["ingested_at"] = as_of
+    db.log_masters_ingest(row)
     return summary
+
+
+def bundled_as_of() -> str | None:
+    """The effective date of the committed master snapshot (reference/MASTERS_VERSION).
+
+    Bumped whenever the bundled files are refreshed; returned as an ISO timestamp
+    so the freshness banner shows the data date, not the deploy time.
+    """
+    try:
+        d = (REFERENCE_DIR / "MASTERS_VERSION").read_text().strip()
+    except FileNotFoundError:
+        return None
+    return f"{d}T00:00:00+00:00" if d else None
 
 
 def load_bundled_masters() -> dict:
@@ -216,4 +238,4 @@ def load_bundled_masters() -> dict:
                 break
     if not kwargs:
         return {"gtin_rows": None, "part_rows": None, "surgeon_rows": None}
-    return ingest_masters(**kwargs)
+    return ingest_masters(as_of=bundled_as_of(), **kwargs)
