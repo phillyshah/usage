@@ -264,6 +264,12 @@ $("#upload-form").addEventListener("submit", async (e) => {
     renderUploadResult(data);
     toast("success", "Tickets received", `${pluralize(files.length, "photo")} uploaded.`);
     uploadPicker.clear();
+    // Step 2 becomes available once tickets are in; the prior step-3 download
+    // (if any) is now stale, so dim it until this batch is extracted again.
+    if (data && Array.isArray(data.tickets) && data.tickets.some((t) => t.status !== "error")) {
+      setStep2Ready(true);
+      setDownloadReady(null);
+    }
   } catch (err) {
     renderNotice(uploadResult, "error", "We couldn't upload your tickets",
       [el("p", { class: "notice-text", text: "Please check the files are photos (JPEG or PNG) and try again." })],
@@ -324,7 +330,13 @@ const runBtn = $("#run-btn");
 const runProgress = $("#run-progress");
 const runResult = $("#run-result");
 
+/** Step 2 is actionable only once tickets have been uploaded this session. */
+function setStep2Ready(ready) {
+  runBtn.disabled = !ready;
+}
+
 runBtn.addEventListener("click", async () => {
+  if (runBtn.disabled) return;
   runBtn.disabled = true;
   runProgress.hidden = false;
   runResult.hidden = true;
@@ -333,7 +345,7 @@ runBtn.addEventListener("click", async () => {
     runProgress.hidden = true;
     if (data && data.batch_id) state.lastBatchId = data.batch_id;
     renderRunResult(data);
-    showDownload(data && data.batch_id);
+    setDownloadReady(data && data.batch_id);
     toast("success", "Data extracted", "Your review spreadsheet is ready in step 3.");
     loadBatches(); // refresh the history list
   } catch (err) {
@@ -343,7 +355,7 @@ runBtn.addEventListener("click", async () => {
       errorDetail(err));
     toast("error", "Processing failed", "Please try again.");
   } finally {
-    runBtn.disabled = false;
+    runBtn.disabled = false; // re-enable so a re-run is possible
   }
 });
 
@@ -362,12 +374,28 @@ function renderRunResult(data) {
 const downloadLink = $("#download-sheet");
 const downloadEmpty = $("#download-empty");
 
-function showDownload(batchId) {
-  if (!batchId) return;
-  downloadLink.href = api.sheetUrl(batchId);
-  downloadLink.hidden = false;
-  downloadEmpty.hidden = true;
+/**
+ * Step 3 download stays visibly dimmed (aria-disabled) until extraction has
+ * produced a batch. Passing a batchId activates it; passing null re-dims it.
+ */
+function setDownloadReady(batchId) {
+  const ready = Boolean(batchId);
+  if (ready) {
+    downloadLink.href = api.sheetUrl(batchId);
+    downloadLink.removeAttribute("aria-disabled");
+    downloadLink.tabIndex = 0;
+  } else {
+    downloadLink.href = "#";
+    downloadLink.setAttribute("aria-disabled", "true");
+    downloadLink.tabIndex = -1;
+  }
+  downloadEmpty.hidden = ready;
 }
+
+// Block clicks while the download is disabled (anchors aren't natively disabled).
+downloadLink.addEventListener("click", (e) => {
+  if (downloadLink.getAttribute("aria-disabled") === "true") e.preventDefault();
+});
 
 /* ===================================================================== *
  *  STEP 4 — Send back corrections

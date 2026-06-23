@@ -158,7 +158,7 @@
       </div>
 
       <div class="step-body">
-        <button type="button" id="run-btn" class="btn btn-primary btn-lg">
+        <button type="button" id="run-btn" class="btn btn-primary btn-lg" disabled>
           <span class="btn-label">Extract data</span>
         </button>
 
@@ -185,7 +185,8 @@
       </div>
 
       <div class="step-body">
-        <a id="download-sheet" class="btn btn-primary" href="#" hidden download>
+        <a id="download-sheet" class="btn btn-primary" href="#" role="button"
+           aria-disabled="true" tabindex="-1" download>
           <span class="btn-icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
