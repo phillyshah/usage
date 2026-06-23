@@ -5,9 +5,23 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.2.4"
+VERSION = "2.3.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.3.0",
+        "date": "2026-06-23",
+        "notes": [
+            "Much better at the handwritten prices: a price written with a '$' or "
+            "commas (like $1,900.00) is now read correctly instead of being "
+            "dropped, and a crossed-out / 'no charge' price is read as 0",
+            "When the line prices add up to the handwritten Grand Total, the tool "
+            "now trusts them (shown white/confident); when they don't add up it "
+            "flags the prices amber for a quick check",
+            "Sharpened the instructions the reader uses for handwritten prices, "
+            "the freight fee, and the grand total",
+        ],
+    },
     {
         "version": "2.2.4",
         "date": "2026-06-23",
