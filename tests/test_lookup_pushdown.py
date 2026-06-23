@@ -40,6 +40,52 @@ def test_lookups_use_predicate_not_full_scan(monkeypatch):
     fake.select.assert_not_called()
 
 
+def test_operational_reads_use_predicate_not_full_scan(monkeypatch):
+    """field_extractions/line_items/tickets reads must push their filter to the
+    DB. field_extractions is the highest-volume table; a capped full-table read
+    silently drops recent tickets' confidence + raw snapshots, blanking the
+    whole deliverable even though the data was extracted and stored."""
+    fake = MagicMock()
+    fake.find_all.return_value = []
+    fake.find_one.return_value = None
+    fake.select.side_effect = AssertionError(
+        "operational read used a capped full-table select()")
+    monkeypatch.setattr(db, "backend", fake)
+
+    db.field_extractions_for_ticket("t1")
+    fake.find_all.assert_called_with("field_extractions", "ticket_id", "t1")
+    db.lines_for_ticket("t1")
+    fake.find_all.assert_called_with("line_items", "ticket_id", "t1")
+    db.tickets_for_batch("b1")
+    fake.find_all.assert_called_with("tickets", "batch_id", "b1")
+    db.pending_tickets()
+    fake.find_all.assert_called_with("tickets", "status", "pending_review")
+    db.get_ticket("t1")
+    fake.find_one.assert_called_with("tickets", "ticket_id", "t1")
+    db.get_batch("b1")
+    fake.find_one.assert_called_with("batches", "id", "b1")
+
+    fake.select.assert_not_called()
+
+
+def test_field_extractions_found_beyond_1000_rows(monkeypatch, tmp_path):
+    """A ticket whose field_extractions sit past row 1000 are still returned in
+    full (the cap that blanked the deliverable)."""
+    import app.db as dbmod
+
+    backend = dbmod._LocalBackend(str(tmp_path))
+    # 1200 unrelated rows, then the ticket we care about at the very end.
+    filler = [{"ticket_id": f"old-{i}", "field_name": "ref", "orig_value": "x"}
+              for i in range(1200)]
+    mine = [{"ticket_id": "T", "field_name": fn, "orig_value": "v"}
+            for fn in ("ref", "raw_blob", "lot")]
+    backend.replace_all("field_extractions", filler + mine, key_col="ticket_id")
+    monkeypatch.setattr(db, "backend", backend)
+
+    got = db.field_extractions_for_ticket("T")
+    assert {r["field_name"] for r in got} == {"ref", "raw_blob", "lot"}
+
+
 def test_gtin_resolves_for_row_beyond_1000(monkeypatch, tmp_path):
     """End-to-end: a GTIN whose master row sits well past index 1000 still
     resolves. (The local store never caps, but this locks in the contract that

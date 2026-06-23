@@ -480,10 +480,7 @@ class Database:
         return rows
 
     def get_batch(self, batch_id: str) -> dict | None:
-        for r in self.backend.select("batches"):
-            if r.get("id") == batch_id:
-                return r
-        return None
+        return self.backend.find_one("batches", "id", batch_id)
 
     # ---- tickets ----
     def create_ticket(self, row: dict) -> dict:
@@ -501,16 +498,14 @@ class Database:
         self.backend.update_where("tickets", "ticket_id", ticket_id, patch)
 
     def get_ticket(self, ticket_id: str) -> dict | None:
-        for r in self.backend.select("tickets"):
-            if r.get("ticket_id") == ticket_id:
-                return r
-        return None
+        return self.backend.find_one("tickets", "ticket_id", ticket_id)
 
     def tickets_for_batch(self, batch_id: str) -> list[dict]:
-        return [r for r in self.backend.select("tickets") if r.get("batch_id") == batch_id]
+        # Predicate pushed to the DB — never the 1000-row select() cap.
+        return self.backend.find_all("tickets", "batch_id", batch_id)
 
     def pending_tickets(self, batch_id: str | None = None) -> list[dict]:
-        rows = [r for r in self.backend.select("tickets") if r.get("status") == "pending_review"]
+        rows = self.backend.find_all("tickets", "status", "pending_review")
         if batch_id:
             rows = [r for r in rows if r.get("batch_id") == batch_id]
         return rows
@@ -523,7 +518,7 @@ class Database:
         return self.backend.insert("line_items", row)
 
     def lines_for_ticket(self, ticket_id: str) -> list[dict]:
-        return [r for r in self.backend.select("line_items") if r.get("ticket_id") == ticket_id]
+        return self.backend.find_all("line_items", "ticket_id", ticket_id)
 
     # ---- field extractions (per-field snapshot) ----
     def add_field_extraction(self, row: dict) -> None:
@@ -531,9 +526,10 @@ class Database:
         self.backend.insert("field_extractions", row)
 
     def field_extractions_for_ticket(self, ticket_id: str) -> list[dict]:
-        return [
-            r for r in self.backend.select("field_extractions") if r.get("ticket_id") == ticket_id
-        ]
+        # The highest-volume table (~10 rows per line item). MUST push the
+        # ticket_id filter to the DB or the 1000-row select() cap silently drops
+        # recent tickets' confidence + raw snapshots -> a blank deliverable.
+        return self.backend.find_all("field_extractions", "ticket_id", ticket_id)
 
     # ---- corrections audit + uploads log ----
     def add_correction_audit(self, row: dict) -> None:
