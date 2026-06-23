@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.5.0"
+VERSION = "2.5.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.5.1",
+        "date": "2026-06-23",
+        "notes": [
+            "Fixed tickets occasionally coming back empty with a 'Processing "
+            "error' when several were extracted at once (a transient connection "
+            "drop). The tool now retries automatically, so every ticket in a "
+            "batch — including each page of a multi-page PDF — comes through",
+        ],
+    },
     {
         "version": "2.5.0",
         "date": "2026-06-23",
