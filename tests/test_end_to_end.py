@@ -9,6 +9,7 @@ import io
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
+from app.db import db
 from app.main import app
 from tests.fixtures._synthetic import (
     gs1_payload,
@@ -47,6 +48,11 @@ def test_full_pipeline():
     summary = r.json()
     assert summary["unique_parts"] == 1
     assert summary["unique_lots"] == 1
+    # Seed the part_info master so the lot-recovered REF gets a description.
+    db.replace_reference_part_info([
+        {"part_number": REF, "description": DESC, "part_type": "Shell",
+         "category": "Acetabular Cup"},
+    ])
 
     # 2. Upload a ticket image carrying that lot's DataMatrix.
     payload = gs1_payload(GTIN, EXPIRY_YYMMDD, LOT)
@@ -73,15 +79,15 @@ def test_full_pipeline():
     r = client.get(f"/batches/{batch_id}/sheet")
     assert r.status_code == 200, r.text
     wb = load_workbook(io.BytesIO(r.content))
-    assert wb.sheetnames == ["Usage", "Tickets", "Legend"]
+    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Legend"]
 
     ws_lines = wb["Usage"]
     headers = [c.value for c in ws_lines[1]]
-    assert "Reference Number" in headers
-    # The barcode-driven line resolved from the log.
+    assert "Ref Number" in headers
+    # The barcode lot recovered the REF from the Expiry Log.
     rows = list(ws_lines.iter_rows(min_row=2, values_only=True))
     assert rows, "expected at least one line item"
-    ref_col = headers.index("Reference Number")
+    ref_col = headers.index("Ref Number")
     lot_col = headers.index("Lot Number")
     assert rows[0][ref_col] == REF
     assert rows[0][lot_col] == LOT
@@ -92,12 +98,11 @@ def test_full_pipeline():
     assert price_cell.value in (None, ""), "price should be blank without a vision read"
     assert price_cell.fill.fgColor.rgb.endswith("F4CCCC"), "blank price should be red"
 
-    # REF resolved from the barcode + log -> no fill (confident).
+    # REF recovered via the lot (not the GTIN master) -> medium/amber: eyeball it.
     ref_cell = ws_lines.cell(row=2, column=ref_col + 1)
-    fill = ref_cell.fill.fgColor.rgb
-    assert fill in (None, "00000000"), f"confident REF should be unfilled, got {fill}"
+    assert ref_cell.fill.fgColor.rgb.endswith("FFF2CC"), "lot-recovered REF should be amber"
 
-    # 5. Re-upload a corrected sheet: fill the price, change nothing else.
+    # 5. Re-upload a corrected sheet (edit the Line Items sheet that carries IDs).
     corrected = _corrected_copy(r_content=r.content, price=750.0)
     r2 = client.post(
         "/corrections/upload",
@@ -111,13 +116,12 @@ def test_full_pipeline():
 
 
 def _corrected_copy(r_content: bytes, price: float) -> bytes:
-    """Open the generated workbook, fill the blank Price, return bytes."""
+    """Open the generated workbook, fill the blank Unit Price on the Line Items
+    sheet (the one carrying the Ticket/Line IDs the round-trip matches on)."""
     wb = load_workbook(io.BytesIO(r_content))
-    ws = wb["Usage"]
+    ws = wb["Line Items"]
     headers = [c.value for c in ws[1]]
-    price_col = headers.index("Price") + 1
-    qty_col = headers.index("Quantity") + 1
-    ws.cell(row=2, column=qty_col).value = 1
+    price_col = headers.index("Unit Price") + 1
     ws.cell(row=2, column=price_col).value = price
     buf = io.BytesIO()
     wb.save(buf)

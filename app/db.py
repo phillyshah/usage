@@ -30,7 +30,11 @@ _LOCAL_TABLES = [
     "app_settings",
     "reference_lots",
     "reference_parts",
+    "reference_gtin",
+    "reference_part_info",
+    "reference_surgeons",
     "log_ingests",
+    "masters_ingests",
     "learning_part_desc",
     "learning_rep_map",
     "learning_price",
@@ -214,6 +218,79 @@ class Database:
 
     def reference_parts(self) -> list[dict]:
         return self.backend.select("reference_parts")
+
+    # ---- reference masters (GTIN / part_info / surgeon crosswalks) ----
+    def replace_reference_gtin(self, rows: list[dict]) -> None:
+        for r in rows:
+            r.setdefault("ingested_at", _now_iso())
+        self.backend.replace_all("reference_gtin", rows, key_col="gtin_14")
+
+    def replace_reference_part_info(self, rows: list[dict]) -> None:
+        for r in rows:
+            r.setdefault("ingested_at", _now_iso())
+        self.backend.replace_all("reference_part_info", rows, key_col="part_number")
+
+    def replace_reference_surgeons(self, rows: list[dict]) -> None:
+        for r in rows:
+            r.setdefault("ingested_at", _now_iso())
+        self.backend.replace_all("reference_surgeons", rows, key_col="surgeon_distcode")
+
+    def log_masters_ingest(self, row: dict) -> dict:
+        row.setdefault("id", new_id())
+        row.setdefault("ingested_at", _now_iso())
+        return self.backend.insert("masters_ingests", row)
+
+    def latest_masters_ingest(self) -> dict | None:
+        rows = self.backend.select("masters_ingests")
+        if not rows:
+            return None
+        return max(rows, key=lambda r: r.get("ingested_at") or "")
+
+    def has_masters(self) -> bool:
+        """True once the product/surgeon masters have been loaded at least once."""
+        return bool(self.backend.select("reference_gtin"))
+
+    def sku_for_gtin(self, gtin: str) -> dict | None:
+        """Decoded (01) GTIN-14 -> product master row (SKU = Ref Number)."""
+        if not gtin:
+            return None
+        key = str(gtin).strip()
+        for r in self.backend.select("reference_gtin"):
+            if (r.get("gtin_14") or "").strip() == key:
+                return r
+        return None
+
+    def part_info_for_ref(self, ref: str) -> dict | None:
+        """Ref Number -> {description, part_type, category}. Exact match, then
+        case-insensitive (trailing +/- are significant and preserved)."""
+        if not ref:
+            return None
+        rows = self.backend.select("reference_part_info")
+        for r in rows:  # exact first (preserves +/- suffix distinctions)
+            if (r.get("part_number") or "") == ref:
+                return r
+        key = ref.strip().upper()
+        for r in rows:
+            if (r.get("part_number") or "").strip().upper() == key:
+                return r
+        return None
+
+    def surgeon_for_key(self, key: str) -> dict | None:
+        """<SurgeonLastName><DistCode> (normalized) -> surgeon_info record.
+        Prefers an Active record when duplicates exist."""
+        if not key:
+            return None
+        k = str(key).strip().upper()
+        matches = [
+            r for r in self.backend.select("reference_surgeons")
+            if (r.get("surgeon_distcode") or "").strip().upper() == k
+        ]
+        if not matches:
+            return None
+        for r in matches:
+            if (r.get("status") or "").strip().lower() == "active":
+                return r
+        return matches[0]
 
     # ---- part_resolved view: learned override, else log ----
     def resolve_part_desc(self, ref: str) -> dict | None:

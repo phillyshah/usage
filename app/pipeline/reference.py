@@ -1,66 +1,113 @@
-"""REF / lot resolution against the reference log + learning overrides.
+"""Device + surgeon resolution against the reference masters.
 
-Resolution order honours the spec:
-  * REF -> description/size via part_resolved (learned correction overrides log).
-  * Recover a missing REF from a known LOT, or from the GTIN->REF crosswalk.
-  * Validate against the log; anything absent gets flagged upstream.
+Most output columns are joins, not reads (FIELD_GUIDE §5). The deterministic
+chain per device line:
+
+  (01) GTIN-14  --reference_gtin-->  SKU (= Ref Number) + product status
+  Ref Number    --part_info------->  Description / Part Type / Category
+  (10) LOT      --Expiry Log------>  authoritative lot expiry (validation)
+
+(240) and any printed/vision REF are cross-checks on the GTIN-derived SKU. When
+the barcode is unreadable, a vision-read REF/LOT still drives the same joins.
+
+The surgeon header drives a second chain:
+
+  <SurgeonLastName><DistCode>  --surgeon_info-->  SurgeonName / Hospital /
+                                                  Region / canonical DistCode
 """
 from __future__ import annotations
 
 from app.db import db
-
-
-def _split_size(description: str | None) -> str | None:
-    """Pull a size out of a description like 'Tibial Augment, Size 4'."""
-    if not description:
-        return None
-    low = description.lower()
-    if "size" in low:
-        idx = low.rindex("size")
-        tail = description[idx + len("size"):].strip(" :,-")
-        return tail or None
-    return None
+from app.learning.ingest_reference import surgeon_key
 
 
 def resolve_part(ref: str | None, gtin: str | None, lot: str | None) -> dict:
-    """Look up description/size; recover REF from lot or GTIN crosswalk; validate.
+    """Resolve a device line to its Ref Number and reference attributes.
 
-    -> {ref, description, size, expiry_ref, in_log, source}
-       source: how the REF was established (printed | lot | gtin_xref | None)
+    `ref` is any printed/vision/(240)-read REF; `gtin` is the decoded (01);
+    `lot` is the decoded/read (10). Returns the joined attributes plus the
+    provenance and validation flags the confidence model needs.
     """
-    result = {
-        "ref": ref,
+    result: dict = {
+        "ref": None,
+        "ref_source": None,        # gtin | barcode_240 | printed | lot | None
+        "gtin": gtin,
+        "gtin_status": None,
+        "in_gtin_master": False,
         "description": None,
-        "size": None,
+        "part_type": None,
+        "category": None,
+        "in_part_info": False,
         "expiry_ref": None,
-        "in_log": False,
-        "source": "printed" if ref else None,
+        "in_expiry_log": False,
+        "ref_crosscheck_ok": None,  # gtin-SKU vs printed/(240) REF agree?
     }
 
-    # 1. Recover REF if we don't have one.
-    if not result["ref"] and lot:
+    # 1. Ref Number — GTIN master is primary; (240)/printed/lot are fallbacks.
+    sku = None
+    if gtin:
+        grow = db.sku_for_gtin(gtin)
+        if grow:
+            result["in_gtin_master"] = True
+            result["gtin_status"] = grow.get("status")
+            sku = grow.get("sku")
+    if sku:
+        result["ref"], result["ref_source"] = sku, "gtin"
+        if ref:  # cross-check the read REF against the authoritative SKU
+            result["ref_crosscheck_ok"] = (str(ref).strip() == str(sku).strip())
+    elif ref:
+        result["ref"], result["ref_source"] = ref, "printed"
+    elif lot:
         lot_row = db.lot_lookup(lot)
         if lot_row and lot_row.get("part_no"):
-            result["ref"] = lot_row["part_no"]
-            result["source"] = "lot"
-    if not result["ref"] and gtin:
-        xref = db.ref_for_gtin(gtin)
-        if xref:
-            result["ref"] = xref
-            result["source"] = "gtin_xref"
+            result["ref"], result["ref_source"] = lot_row["part_no"], "lot"
 
-    # 2. Description/size via part_resolved (learned override, else log).
+    # 2. Description / Part Type / Category via part_info (exact REF, incl. +/-).
     if result["ref"]:
-        part = db.resolve_part_desc(result["ref"])
-        if part:
-            result["in_log"] = True
-            result["description"] = part.get("description")
-            result["size"] = part.get("size") or _split_size(part.get("description"))
+        pinfo = db.part_info_for_ref(result["ref"])
+        if pinfo:
+            result["in_part_info"] = True
+            result["description"] = pinfo.get("description")
+            result["part_type"] = pinfo.get("part_type")
+            result["category"] = pinfo.get("category")
 
-    # 3. Authoritative expiry for the lot (independent cross-check vs barcode).
+    # 3. Authoritative lot expiry from the Expiry Log (cross-check vs barcode).
     if lot:
         lot_row = db.lot_lookup(lot)
         if lot_row:
+            result["in_expiry_log"] = True
             result["expiry_ref"] = lot_row.get("expiry_date")
 
+    return result
+
+
+def resolve_surgeon(surgeon_last_name: str | None, dist_code: str | None) -> dict:
+    """Resolve the header surgeon+DistCode to the surgeon_info record.
+
+    Key = <SurgeonLastName><DistCode>. A miss is the "Distributor Code must match
+    surgeon" flag (FIELD_GUIDE §6). Returns the joined columns + a matched flag.
+    """
+    result: dict = {
+        "matched": False,
+        "key": surgeon_key(surgeon_last_name, dist_code),
+        "surgeon_full_name": None,
+        "hospital": None,
+        "region": None,
+        "dist_code": None,
+        "distributor_rep": None,
+        "sales_manager": None,
+        "status": None,
+    }
+    row = db.surgeon_for_key(result["key"]) if result["key"] else None
+    if row:
+        result.update({
+            "matched": True,
+            "surgeon_full_name": row.get("surgeon_full_name"),
+            "hospital": row.get("hospital"),
+            "region": row.get("region"),
+            "dist_code": row.get("dist_code"),
+            "distributor_rep": row.get("distributor_rep"),
+            "sales_manager": row.get("sales_manager"),
+            "status": row.get("status"),
+        })
     return result

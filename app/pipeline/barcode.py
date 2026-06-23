@@ -37,18 +37,115 @@ except Exception:  # pragma: no cover
     _HAS_BIIP = False
 
 
+import calendar
+
+
 def available() -> bool:
     return (_HAS_DMTX or _HAS_ZBAR) and _HAS_BIIP
 
 
+def gtin_check_digit_ok(gtin14: str | None) -> bool:
+    """Validate a GTIN-14 mod-10 check digit (FIELD_GUIDE §4)."""
+    if not (gtin14 and gtin14.isdigit() and len(gtin14) == 14):
+        return False
+    body = [int(c) for c in gtin14[:13]]
+    check = int(gtin14[13])
+    s = sum(d * (3 if i % 2 == 0 else 1) for i, d in enumerate(reversed(body)))
+    return (10 - s % 10) % 10 == check
+
+
+def _yymmdd(s: str) -> str | None:
+    """GS1 YYMMDD -> 'YYYY-MM-DD'. DD=00 means end of month (GS1 convention)."""
+    if not (s and s.isdigit() and len(s) == 6):
+        return None
+    yy, mm, dd = int(s[:2]), int(s[2:4]), int(s[4:6])
+    if not 1 <= mm <= 12:
+        return None
+    year = 2000 + yy
+    if dd == 0:
+        dd = calendar.monthrange(year, mm)[1]
+    if not 1 <= dd <= 31:
+        return None
+    return f"{year:04d}-{mm:02d}-{dd:02d}"
+
+
+def _parse_maxx_gs1(raw: str) -> dict | None:
+    """Parse a separator-free Maxx GS1 DataMatrix payload.
+
+    The Maxx labels encode the UDI without FNC1/GS separators, so biip cannot
+    delimit the variable-length AIs. The grammar is fixed, though:
+        (01)<14> (10)<lot> [(11)<YYMMDD>] [(17)<YYMMDD>] (240)<ref>
+    We anchor on the fixed-width pieces: a 14-digit GTIN at the front, the date
+    AIs peeled from the right, the (240) REF as the trailing alphanumeric AI, and
+    whatever remains between is the (10) lot.
+    """
+    s = (raw or "").strip()
+    if not (s.startswith("01") and len(s) >= 16 and s[2:16].isdigit()):
+        return None
+    gtin = s[2:16]
+    if not gtin_check_digit_ok(gtin):
+        return None
+    rest = s[16:]
+
+    # (240) REF is the trailing AI; its value carries letters (e.g. MO-MSFC-56/MH).
+    ref = None
+    idx = rest.rfind("240")
+    if idx != -1:
+        cand = rest[idx + 3:]
+        if cand and any(c.isalpha() for c in cand):
+            ref, rest = cand, rest[:idx]
+
+    # Peel the date AIs from the right: (17) expiry, then (11) mfg.
+    expiry = mfg = None
+    if len(rest) >= 8 and rest[-8:-6] == "17" and rest[-6:].isdigit():
+        d = _yymmdd(rest[-6:])
+        if d:
+            expiry, rest = d, rest[:-8]
+    if len(rest) >= 8 and rest[-8:-6] == "11" and rest[-6:].isdigit():
+        d = _yymmdd(rest[-6:])
+        if d:
+            mfg, rest = d, rest[:-8]
+
+    # Whatever is left must be the (10) lot AI. If it isn't a clean "10"-prefixed
+    # remainder this payload isn't the separator-free Maxx grammar — bail and let
+    # biip try (it handles properly FNC1-separated GS1 in any AI order).
+    if not rest.startswith("10"):
+        return None
+    lot = rest[2:] or None
+
+    fields = {
+        "gtin": gtin,
+        "lot": lot,
+        "expiry": expiry,
+        "mfg": mfg,
+        "serial": None,
+        "ref": ref,
+        "raw": raw,
+        "decoded": bool(gtin or lot),
+    }
+    return fields
+
+
 def _raw_payloads(crop) -> list[str]:
-    """Return all decoded raw strings from a single label crop."""
+    """Return all decoded raw strings from an image region.
+
+    DataMatrix decode time scales with pixel count, so full-resolution phone
+    photos (~24 MP) need an internal ``shrink`` and a longer timeout or nothing
+    decodes in time. Pick both from the image size; small synthetic crops stay
+    at full resolution.
+    """
     out: list[str] = []
     if crop is None:
         return out
     if _HAS_DMTX:
         try:
-            for r in pylibdmtx.decode(crop, timeout=2000):
+            shape = getattr(crop, "shape", None)
+            px = (shape[0] * shape[1]) if shape else 0
+            if px > 4_000_000:
+                shrink, timeout = 2, 12000
+            else:
+                shrink, timeout = 1, 3000
+            for r in pylibdmtx.decode(crop, timeout=timeout, shrink=shrink, max_count=40):
                 out.append(r.data.decode("utf-8", "replace"))
         except Exception:
             pass
@@ -69,37 +166,56 @@ def _parse_gs1(raw: str) -> dict:
         "expiry": None,
         "mfg": None,
         "serial": None,
+        "ref": None,
         "raw": raw,
         "decoded": False,
     }
     if not raw:
         return fields
-    if not _HAS_BIIP:
-        # Without biip we still keep the raw payload for audit; no parse.
-        return fields
-    try:
-        msg = GS1Message.parse(raw)
-    except ParseError:
-        return fields
-    except Exception:
-        return fields
 
-    for e in msg.element_strings:
-        ai = e.ai.ai
-        if ai == "01" and e.gtin is not None:
-            fields["gtin"] = e.gtin.value
-        elif ai == "10":
-            fields["lot"] = e.value
-        elif ai == "17" and e.date is not None:
-            fields["expiry"] = e.date.isoformat()
-        elif ai == "11" and e.date is not None:
-            fields["mfg"] = e.date.isoformat()
-        elif ai == "21":
-            fields["serial"] = e.value
+    # Maxx DataMatrix payloads carry no FNC1/GS separators, which makes biip's
+    # variable-length parse a greedy guess. For those the structured parser is
+    # authoritative; biip is only trusted when real separators are present.
+    has_sep = "\x1d" in raw or "\x1e" in raw
+    if not has_sep:
+        alt = _parse_maxx_gs1(raw)
+        if alt and alt["decoded"]:
+            return alt
 
-    fields["decoded"] = any(
-        fields[k] for k in ("gtin", "lot", "expiry", "mfg", "serial")
-    )
+    if _HAS_BIIP:
+        try:
+            msg = GS1Message.parse(raw)
+        except Exception:
+            msg = None
+        if msg is not None:
+            for e in msg.element_strings:
+                ai = e.ai.ai
+                if ai == "01" and e.gtin is not None:
+                    fields["gtin"] = e.gtin.value
+                elif ai == "10":
+                    fields["lot"] = e.value
+                elif ai == "17" and e.date is not None:
+                    fields["expiry"] = e.date.isoformat()
+                elif ai == "11" and e.date is not None:
+                    fields["mfg"] = e.date.isoformat()
+                elif ai == "21":
+                    fields["serial"] = e.value
+                elif ai == "240":
+                    fields["ref"] = e.value
+            fields["decoded"] = any(
+                fields[k] for k in ("gtin", "lot", "expiry", "mfg", "serial")
+            )
+
+    # Maxx labels encode the UDI without separators, so biip usually fails or
+    # comes back without the (240) REF. Fall back to the structured parser and
+    # fill anything still missing (it validates the GTIN check digit too).
+    if not fields["decoded"] or fields["ref"] is None:
+        alt = _parse_maxx_gs1(raw)
+        if alt:
+            for k in ("gtin", "lot", "expiry", "mfg", "serial", "ref"):
+                if fields.get(k) is None and alt.get(k) is not None:
+                    fields[k] = alt[k]
+            fields["decoded"] = fields["decoded"] or alt["decoded"]
     return fields
 
 
@@ -119,6 +235,7 @@ def decode_labels(label_crops: list) -> list[dict]:
             "expiry": None,
             "mfg": None,
             "serial": None,
+            "ref": None,
             "raw": None,
             "decoded": False,
         }

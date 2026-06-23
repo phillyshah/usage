@@ -31,18 +31,30 @@ Shape:
     "entity": {...}, "rep": {...}, "rep_code": {...}, "surgeon": {...},
     "hospital": {...}, "surgery_date": {...}, "po_number": {...}
   },
-  "lines": [ {"index": <int>, "ref": {...}, "lot": {...}, "qty": {...}, "unit_price": {...}} ],
+  "lines": [ {"index": <int>, "ref": {...}, "lot": {...}, "qty": {...},
+             "unit_price": {...}, "wasted": {...}} ],
   "freight": {...},
   "grand_total": {...}
 }
+
+Header fields to read off the (mostly handwritten) header:
+  - "surgeon": the surgeon's name as written, usually just the last name (e.g.
+    "Montijo"). Read it exactly; do not expand or correct it.
+  - "rep_code": the Rep / Distributor code (e.g. "MC-001", "GR-MO-001"). Normalize
+    surrounding spaces but keep the characters exactly.
+  - "surgery_date": the date of surgery.
+  - "hospital": the hospital/facility as written (a cross-check only).
 
 For each device label, read the PRINTED catalogue/reference number and lot:
   - "ref": the REF / catalogue number printed on the label (e.g. "RAUUX412-RK",
     "MO-MSFC-52/MM"). It is printed text, usually labelled "REF" — read it exactly,
     character for character; do not guess or expand it.
   - "lot": the lot/batch number printed on the label (usually labelled "LOT").
+  - "unit_price": the handwritten price near that label.
+  - "wasted": true if a handwritten "W" or "wasted" appears near the component
+    (the item is still used — just mark it); otherwise false.
 Read these from the printed label text even when a barcode is present. Do NOT
-provide a description — that is looked up separately from the reference log.
+provide a description — that is looked up separately from the reference tables.
 
 Dates as ISO YYYY-MM-DD. Money as numbers without symbols. "lines" is ordered
 top-to-bottom; skip empty slots that read "Place Implant Label".

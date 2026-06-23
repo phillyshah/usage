@@ -38,6 +38,17 @@ LINE_FIELDS = [
 ]
 
 
+def _is_wasted(vline: dict) -> bool:
+    """A handwritten 'W'/'wasted' near a component marks it wasted (still a row)."""
+    w = vline.get("wasted")
+    val = _v(w) if isinstance(w, dict) else w
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in ("w", "wasted", "true", "yes")
+    return False
+
+
 def _v(field: dict | None):
     """Unwrap a {value, confidence} pair -> value (or None)."""
     if not isinstance(field, dict):
@@ -124,9 +135,11 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         from_barcode = bool(label.get("ref") or label.get("lot") or label.get("gtin"))
 
         part = resolve_part(ref_in, label.get("gtin"), lot_in)
+        wasted = _is_wasted(vline)
 
-        qty = _v(vline.get("qty"))
-        qty = int(qty) if isinstance(qty, (int, float)) else (int(qty) if str(qty).isdigit() else None)
+        # One row per physical unit (per label/lot): Quantity is always 1
+        # (FIELD_GUIDE §6). A REF used N times yields N rows, one per lot.
+        qty = 1
         unit_price = _num(_v(vline.get("unit_price")))
 
         # Hospital price memory: suggestion only, never override.
@@ -141,18 +154,35 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
                 else:
                     price_conf = "medium"  # disagreement -> eyeball it (never replace)
 
-        line_total = round(qty * unit_price, 2) if (qty and unit_price is not None) else None
+        line_total = round(qty * unit_price, 2) if unit_price is not None else None
 
-        # Expiry: prefer barcode (exact), cross-check log.
+        # Expiry: prefer barcode (exact), cross-check the Expiry Log.
         expiry = label.get("expiry") or part.get("expiry_ref")
         expiry_conf = "high" if label.get("expiry") else ("high" if part.get("expiry_ref") else "low")
         if label.get("expiry") and part.get("expiry_ref") and label["expiry"] != part["expiry_ref"]:
             expiry_conf = "low"
 
+        # Per-line flags (review signals).
+        lflags: list[str] = []
+        if wasted:
+            lflags.append("WASTED")
+        if part.get("gtin") and not part.get("in_gtin_master"):
+            lflags.append("GTIN not in product master")
+        elif part.get("gtin_status") and part["gtin_status"].strip().lower() != "in use":
+            lflags.append(f"GTIN status {part['gtin_status']}")
+        if part.get("ref") and not part.get("in_part_info"):
+            lflags.append("REF not in part_info")
+        if part.get("ref_crosscheck_ok") is False:
+            lflags.append("Read REF disagrees with GTIN master")
+        if lot_in and not part.get("in_expiry_log"):
+            lflags.append("LOT not in Expiry Log")
+        if label.get("expiry") and part.get("expiry_ref") and label["expiry"] != part["expiry_ref"]:
+            lflags.append("Barcode expiry disagrees with Expiry Log")
+
         row = {
             "ticket_id": ticket_id,
             "ref": part.get("ref"),
-            "gtin": label.get("gtin"),
+            "gtin": part.get("gtin"),
             "description": part.get("description"),
             "size": part.get("size"),
             "lot": lot_in,
@@ -161,38 +191,39 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             "expiry_date": expiry,
             "unit_price": unit_price,
             "line_total": line_total,
-            "in_log": part.get("in_log", False),
+            "in_part_info": part.get("in_part_info", False),
+            "part_type": part.get("part_type"),
+            "category": part.get("category"),
             "expiry_ref": part.get("expiry_ref"),
-            "flags": [],
+            "wasted": wasted,
+            "flags": lflags,
         }
-        # Confidence is earned by validation. A barcode-confirmed, in-log REF is
-        # high; an OCR-read REF that still matches the log is medium (legible but
-        # a character could be misread — eyeball it); anything unresolved is low.
-        in_log = part.get("in_log")
-        if in_log:
-            ref_conf = "high" if from_barcode else "medium"
-            desc_conf = "high" if from_barcode else "medium"
-            size_conf = ("high" if from_barcode else "medium") if part.get("size") else "low"
+        # Confidence is earned by validation. A GTIN-master-confirmed REF (exact,
+        # deterministic) is high; an OCR-read REF that still resolves in part_info
+        # is medium (legible but a character could be misread); unresolved is low.
+        if part.get("in_part_info"):
+            ref_conf = "high" if part.get("ref_source") == "gtin" else "medium"
+            desc_conf = ref_conf
         elif part.get("ref"):
-            ref_conf = "medium" if from_barcode else "low"
+            ref_conf = "medium" if part.get("ref_source") == "gtin" else "low"
             desc_conf = "low"
-            size_conf = "low"
         else:
-            ref_conf = desc_conf = size_conf = "low"
+            ref_conf = desc_conf = "low"
         cmap = {
             "ref": ref_conf,
             "description": desc_conf,
-            "size": size_conf,
+            "size": "low",
             "lot": "high" if label.get("lot") else ("medium" if lot_in else "low"),
-            "qty": conf.score_field({"vision": qty, "vision_conf": _c(vline.get("qty"))}),
+            "qty": "high",  # always 1 by rule
             "mfg_date": "high" if label.get("mfg") else "low",
             "expiry_date": expiry_conf,
             "unit_price": price_conf,
             "line_total": "high" if line_total is not None else "low",
         }
-        # GTIN->REF crosswalk: learn when a label gives both a GTIN and a log-confirmed REF.
-        if label.get("gtin") and part.get("ref") and part.get("in_log"):
-            db.learn_gtin_xref(label["gtin"], part["ref"])
+        # GTIN->REF crosswalk: learn when a label gives both a GTIN and a
+        # part_info-confirmed REF.
+        if part.get("gtin") and part.get("ref") and part.get("in_part_info"):
+            db.learn_gtin_xref(part["gtin"], part["ref"])
 
         lines.append(row)
         line_conf.append(cmap)

@@ -67,6 +67,53 @@ create table if not exists log_ingests (
   unique_lots  integer
 );
 
+-- Reference masters (product + surgeon crosswalks). FULL REPLACE on each upload
+-- via POST /reference/masters. Drive the 26-column output deliverable.
+create table if not exists reference_gtin (
+  gtin_14            text primary key,   -- decoded (01)
+  gtin_12_upc        text,
+  sku                text,               -- = Ref Number
+  product_description text,
+  status             text,               -- In Use | PreMarket | ...
+  packaging_type     text,
+  packaging_level    text,
+  ingested_at        timestamptz not null default now()
+);
+create index if not exists idx_refgtin_sku on reference_gtin (upper(sku));
+
+create table if not exists reference_part_info (
+  part_number text primary key,          -- = Ref Number (exact, incl. +/- suffix)
+  description text,
+  part_type   text,
+  category    text,
+  ingested_at timestamptz not null default now()
+);
+create index if not exists idx_refpart_upper on reference_part_info (upper(part_number));
+
+create table if not exists reference_surgeons (
+  surgeon_distcode   text primary key,   -- upper(lastname || distcode)
+  surgeon_last_name  text,
+  dist_code          text,
+  status             text,
+  distributor        text,
+  distributor_rep    text,
+  sales_manager      text,
+  maxx_ortho_manager text,
+  surgeon_full_name  text,
+  hospital           text,
+  region             text,
+  ingested_at        timestamptz not null default now()
+);
+create index if not exists idx_refsurg_dist on reference_surgeons (upper(dist_code));
+
+create table if not exists masters_ingests (
+  id           uuid primary key default gen_random_uuid(),
+  ingested_at  timestamptz not null default now(),
+  gtin_rows    integer,
+  part_rows    integer,
+  surgeon_rows integer
+);
+
 -- ----------------------------------------------------------------------------
 -- 2. Learning stores  (accumulate from corrected re-uploads; never purged)
 -- ----------------------------------------------------------------------------
@@ -258,6 +305,7 @@ declare t text;
 begin
   foreach t in array array[
     'app_settings','reference_lots','reference_parts','log_ingests',
+    'reference_gtin','reference_part_info','reference_surgeons','masters_ingests',
     'learning_part_desc','learning_rep_map','learning_price','learning_gtin_xref',
     'batches','tickets','line_items','field_extractions',
     'corrections_audit','corrected_uploads'

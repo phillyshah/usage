@@ -13,10 +13,12 @@ order**:
 | 05 | `05_view.sql`       | `part_resolved` resolver view |
 | 06 | `06_retention.sql`  | expiry trigger + purge function + nightly cron |
 | 07 | `07_rls.sql`        | enable RLS on all tables (no policies) |
+| 08 | `08_add_source_filename.sql` | adds `tickets.source_filename` |
+| 09 | `09_reference_masters.sql`   | product/surgeon masters: `reference_gtin`, `reference_part_info`, `reference_surgeons`, `masters_ingests` |
 
 Prereq: enable **pg_cron** first (Database → Extensions) so script 06 succeeds.
 
-After 07, verify you have **14 tables**:
+After 09, verify you have **19 tables**:
 
 ```sql
 select table_name from information_schema.tables

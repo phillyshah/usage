@@ -101,10 +101,10 @@ def validate_ticket(ticket: dict, lines: list[dict]) -> list[str]:
     """
     flags: list[str] = []
 
-    # REF in log
+    # REF resolves in the part_info master
     for ln in lines:
-        if ln.get("ref") and not ln.get("in_log", False):
-            flags.append(f"REF {ln['ref']} not found in reference log")
+        if ln.get("ref") and not ln.get("in_part_info", False):
+            flags.append(f"REF {ln['ref']} not found in part_info master")
 
     # LOT expiry agreement (barcode expiry vs log expiry)
     for ln in lines:
