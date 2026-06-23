@@ -7,6 +7,8 @@ single source of truth the sheet writer reads to colour cells.
 """
 from __future__ import annotations
 
+import json
+
 from app.config import settings
 from app.db import db
 from app.pipeline import confidence as conf
@@ -121,8 +123,26 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     # ---- line items: merge barcode labels with vision price/qty by order ----
     lines: list[dict] = []
     line_conf: list[dict] = []
+    raw_blobs: list[dict] = []  # exactly what each source produced, pre-resolution
     for i, label in enumerate(labels):
         vline = vlines[i] if i < len(vlines) else {}
+
+        # Capture the raw extraction (device UDI + vision OCR, no PHI) so the
+        # workbook's Raw Extraction sheet can show what was actually read before
+        # any lookup/resolution — the diagnostic view when output looks empty.
+        raw_blobs.append({
+            "decoded": bool(label.get("decoded")),
+            "payload": label.get("raw"),
+            "gtin": label.get("gtin"),
+            "lot": label.get("lot"),
+            "mfg": label.get("mfg"),
+            "expiry": label.get("expiry"),
+            "ref": label.get("ref"),
+            "vis_ref": _v(vline.get("ref")),
+            "vis_lot": _v(vline.get("lot")),
+            "vis_price": _v(vline.get("unit_price")),
+            "vis_wasted": _is_wasted(vline),
+        })
 
         # Device identity: prefer the barcode (deterministic), fall back to the
         # REF/LOT that vision read off the printed label. Either one lets the
@@ -250,7 +270,7 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
 
     # ---- persist line items + per-field snapshots ----
     persisted_lines = []
-    for row, cmap in zip(lines, line_conf):
+    for row, cmap, raw in zip(lines, line_conf, raw_blobs):
         store_row = {k: row[k] for k in (
             "ticket_id", "ref", "gtin", "description", "size", "lot", "qty",
             "mfg_date", "expiry_date", "unit_price", "line_total", "flags",
@@ -258,6 +278,16 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         created = db.create_line_item(store_row)
         line_id = created["line_id"]
         persisted_lines.append(created)
+        # Raw extraction snapshot (one JSON row per line, source="raw") — read
+        # back by the Raw Extraction sheet. Single insert keeps it cheap.
+        db.add_field_extraction({
+            "ticket_id": ticket_id,
+            "line_id": line_id,
+            "field_name": "raw_blob",
+            "orig_value": json.dumps(raw),
+            "confidence": "high",
+            "source": "raw",
+        })
         for fname in LINE_FIELDS:
             db.add_field_extraction({
                 "ticket_id": ticket_id,

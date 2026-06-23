@@ -79,7 +79,7 @@ def test_full_pipeline():
     r = client.get(f"/batches/{batch_id}/sheet")
     assert r.status_code == 200, r.text
     wb = load_workbook(io.BytesIO(r.content))
-    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Legend"]
+    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Raw Extraction", "Legend"]
 
     ws_lines = wb["Usage"]
     headers = [c.value for c in ws_lines[1]]
