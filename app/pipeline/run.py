@@ -12,6 +12,8 @@ Batch processing (`run_batch`) is used by POST /batches/run and the scheduler:
 from __future__ import annotations
 
 import logging
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import db
@@ -21,6 +23,32 @@ from app.pipeline.template import detect_template, geometry_for
 from app.storage import REDACTED_IMAGES, get_object, put_object, split_ref
 
 log = logging.getLogger("pipeline.run")
+
+
+def _is_transient(exc: Exception) -> bool:
+    """True for connection-level failures worth retrying — chiefly the HTTP/2
+    GOAWAY / ConnectionTerminated the shared Supabase client throws when several
+    tickets are processed at once, plus the usual transient network/overload
+    errors. Matched by type and message so we don't hard-depend on h2/httpx/anthropic.
+    """
+    names = {type(exc).__name__}
+    for ctx in (exc.__cause__, exc.__context__):
+        if ctx is not None:
+            names.add(type(ctx).__name__)
+    transient_types = {
+        "ConnectionTerminated", "RemoteProtocolError", "ConnectError", "ConnectTimeout",
+        "ReadError", "ReadTimeout", "WriteError", "PoolTimeout", "ConnectionError",
+        "APIConnectionError", "APITimeoutError", "RateLimitError", "InternalServerError",
+        "ServerDisconnectedError",
+    }
+    if names & transient_types:
+        return True
+    blob = f"{type(exc).__name__}: {exc}".lower()
+    return any(k in blob for k in (
+        "connectionterminated", "goaway", "server disconnected", "connection reset",
+        "connection aborted", "overloaded", "timed out", "timeout",
+        "502", "503", "504", "529",
+    ))
 
 
 def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
@@ -134,6 +162,27 @@ def process_ticket(ticket: dict) -> dict:
     return summary
 
 
+def _safe_process(ticket: dict, attempts: int = 4) -> None:
+    """Process one ticket, retrying transient connection failures.
+
+    The shared Supabase HTTP/2 client throws ConnectionTerminated (GOAWAY) when
+    several tickets run at once; re-processing is idempotent (assemble clears the
+    ticket's prior rows first), so a retry cleanly replaces any partial write.
+    A non-transient error (or the final attempt) flags the ticket and returns.
+    """
+    for attempt in range(attempts):
+        try:
+            process_ticket(ticket)
+            return
+        except Exception as e:  # pragma: no cover - network-timing dependent
+            if attempt < attempts - 1 and _is_transient(e):
+                time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
+                continue
+            log.exception("failed to process ticket %s: %s", ticket.get("ticket_id"), e)
+            db.update_ticket(ticket["ticket_id"], {"flags": [f"Processing error: {e}"]})
+            return
+
+
 def run_batch(batch_id: str | None = None) -> dict:
     """Process all pending tickets (optionally just one batch) and write the sheet."""
     from app.sheets.write import write_review_workbook
@@ -148,15 +197,11 @@ def run_batch(batch_id: str | None = None) -> dict:
     # releases the GIL), one vision API call (network), and bulk DB writes
     # (network) — all I/O-bound, so threads overlap the latency. Capped to keep
     # the vision API within sane concurrency.
-    def _safe_process(ticket: dict) -> None:
-        try:
-            process_ticket(ticket)
-        except Exception as e:  # pragma: no cover
-            log.exception("failed to process ticket %s: %s", ticket.get("ticket_id"), e)
-            db.update_ticket(ticket["ticket_id"], {"flags": [f"Processing error: {e}"]})
-
     if pending:
-        with ThreadPoolExecutor(max_workers=min(6, len(pending))) as ex:
+        # Cap concurrency low: the work shares one Supabase HTTP/2 client, and too
+        # many simultaneous tickets trigger GOAWAY/ConnectionTerminated. Retries
+        # cover the residual; bulk writes keep each ticket cheap regardless.
+        with ThreadPoolExecutor(max_workers=min(3, len(pending))) as ex:
             list(ex.map(_safe_process, pending))
 
     # Determine the batch to render.
