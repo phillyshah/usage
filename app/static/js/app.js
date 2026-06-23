@@ -418,18 +418,26 @@ async function loadReferenceStatus() {
   try {
     const s = await api.referenceStatus();
     referenceStatus.classList.remove("is-empty");
+    const children = [];
     if (!s || !s.loaded) {
       referenceStatus.classList.add("is-empty");
-      referenceStatus.replaceChildren(
-        el("span", { text: "No Expiry Log loaded yet — upload one below to get started." })
+      children.push(el("span", { text: "No Expiry Log loaded yet — upload one below to get started." }));
+    } else {
+      children.push(
+        el("span", { class: "ref-status-when", text: `Expiry Log updated ${fmtWhen(s.updated_at)}` }),
+        el("span", { class: "ref-status-counts", text:
+          `· ${Number(s.unique_parts || 0).toLocaleString()} parts, ${Number(s.unique_lots || 0).toLocaleString()} lots` }),
       );
-      return;
     }
-    referenceStatus.replaceChildren(
-      el("span", { class: "ref-status-when", text: `Last updated ${fmtWhen(s.updated_at)}` }),
-      el("span", { class: "ref-status-counts", text:
-        `· ${Number(s.unique_parts || 0).toLocaleString()} parts, ${Number(s.unique_lots || 0).toLocaleString()} lots` }),
-    );
+    if (s && s.masters && s.masters.updated_at) {
+      const m = s.masters;
+      children.push(
+        el("span", { class: "ref-status-when", text: ` · Masters updated ${fmtWhen(m.updated_at)}` }),
+        el("span", { class: "ref-status-counts", text:
+          `· ${Number(m.gtin_rows || 0).toLocaleString()} GTINs, ${Number(m.part_rows || 0).toLocaleString()} parts, ${Number(m.surgeon_rows || 0).toLocaleString()} surgeons` }),
+      );
+    }
+    referenceStatus.replaceChildren(...children);
   } catch {
     referenceStatus.replaceChildren(); // hidden via :empty
   }
