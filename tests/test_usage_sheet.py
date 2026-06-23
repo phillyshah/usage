@@ -60,7 +60,7 @@ def test_usage_row_values_and_joins():
     assemble_and_persist(ticket, vision, [_empty_label()])
 
     wb = load_workbook(io.BytesIO(write_review_workbook(batch["id"])))
-    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Legend"]
+    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Raw Extraction", "Legend"]
     ws = wb["Usage"]
     headers = [c.value for c in ws[1]]
     assert headers[:27] == EXPECTED_CONTRACT

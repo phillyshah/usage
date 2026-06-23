@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.1.1"
+VERSION = "2.2.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.2.0",
+        "date": "2026-06-23",
+        "notes": [
+            "New 'Raw Extraction' tab in the review spreadsheet: for every line it "
+            "shows exactly what was read — whether the barcode decoded, the raw "
+            "barcode contents (GTIN, Lot, Mfg, Expiry, Ref), what the photo-reader "
+            "saw, and the final resolved values side by side",
+            "Lines where the barcode didn't decode are flagged in red, so it's "
+            "obvious at a glance when a label needs a clearer photo",
+        ],
+    },
     {
         "version": "2.1.1",
         "date": "2026-06-23",

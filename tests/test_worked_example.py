@@ -103,7 +103,7 @@ def test_six_lines_reconcile_to_grand_total():
 def test_usage_sheet_has_contract_columns_and_joined_values():
     batch, ticket = _build_ticket()
     wb = load_workbook(io.BytesIO(write_review_workbook(batch["id"])))
-    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Legend"]
+    assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Raw Extraction", "Legend"]
 
     ws = wb["Usage"]
     headers = [c.value for c in ws[1]]

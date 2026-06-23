@@ -20,6 +20,7 @@ Keys, derived counts, and Notes stay uncolored.
 from __future__ import annotations
 
 import io
+import json
 import os
 from datetime import date, datetime
 
@@ -99,6 +100,29 @@ TICKET_COLUMNS = [
     ("Flags / Notes", None),
 ]
 
+# Raw Extraction: exactly what each source produced per line, BEFORE any lookup
+# or resolution. The diagnostic view — shows whether the barcode decoded at all
+# and what vision read, next to the final resolved values.
+RAW_COLUMNS = [
+    "Source Image",
+    "Line",
+    "Barcode Decoded?",
+    "Raw Barcode Payload",
+    "Barcode GTIN",
+    "Barcode Lot",
+    "Barcode Mfg",
+    "Barcode Expiry",
+    "Barcode Ref (240)",
+    "Vision Ref",
+    "Vision Lot",
+    "Vision Price",
+    "Wasted?",
+    "Resolved Ref",
+    "Resolved Description",
+    "Resolved Part Type",
+    "Resolved Category",
+]
+
 # Per-line sheet WITH the stable IDs the corrections round-trip matches on.
 LINE_ITEM_COLUMNS = [
     ("Ticket ID", None),
@@ -160,6 +184,18 @@ def _conf_map(ticket_id: str) -> dict:
     out: dict = {}
     for fe in db.field_extractions_for_ticket(ticket_id):
         out[(fe.get("line_id"), fe.get("field_name"))] = (fe.get("confidence") or "low").lower()
+    return out
+
+
+def _raw_map(ticket_id: str) -> dict:
+    """line_id -> raw extraction dict (the JSON snapshot persisted at assembly)."""
+    out: dict = {}
+    for fe in db.field_extractions_for_ticket(ticket_id):
+        if fe.get("field_name") == "raw_blob" and fe.get("line_id"):
+            try:
+                out[fe["line_id"]] = json.loads(fe.get("orig_value") or "{}")
+            except (ValueError, TypeError):
+                out[fe["line_id"]] = {}
     return out
 
 
@@ -351,6 +387,45 @@ def _write_line_items_sheet(ws, tickets) -> None:
     _autosize(ws, len(LINE_ITEM_COLUMNS))
 
 
+def _write_raw_extraction_sheet(ws, tickets) -> None:
+    """Dump the raw, pre-resolution extraction per line so it's clear exactly
+    what the decoder and vision produced (the diagnostic view)."""
+    ws.append(RAW_COLUMNS)
+    _style_header(ws, len(RAW_COLUMNS))
+
+    for ticket in tickets:
+        stem = _file_stem(ticket.get("source_filename"))
+        raw_by_line = _raw_map(ticket["ticket_id"])
+        lines = db.lines_for_ticket(ticket["ticket_id"])
+        lines.sort(key=lambda x: x.get("created_at") or "")
+        for i, line in enumerate(lines, start=1):
+            raw = raw_by_line.get(line["line_id"], {})
+            pinfo = db.part_info_for_ref(line.get("ref")) if line.get("ref") else None
+            ws.append([
+                stem,
+                i,
+                "Yes" if raw.get("decoded") else "No",
+                raw.get("payload"),
+                raw.get("gtin"),
+                raw.get("lot"),
+                raw.get("mfg"),
+                raw.get("expiry"),
+                raw.get("ref"),
+                raw.get("vis_ref"),
+                raw.get("vis_lot"),
+                raw.get("vis_price"),
+                "Yes" if raw.get("vis_wasted") else "",
+                line.get("ref"),
+                line.get("description"),
+                (pinfo or {}).get("part_type"),
+                (pinfo or {}).get("category"),
+            ])
+            # Flag rows where nothing decoded so they're easy to spot.
+            if not raw.get("decoded"):
+                ws.cell(row=ws.max_row, column=3).fill = RED
+    _autosize(ws, len(RAW_COLUMNS))
+
+
 def _write_legend_sheet(ws) -> None:
     ws.append(["Color", "Meaning", "What to do"])
     _style_header(ws, 3)
@@ -380,6 +455,7 @@ def write_review_workbook(batch_id: str) -> bytes:
     _write_usage_sheet(ws_u, tickets)
     _write_tickets_sheet(wb.create_sheet("Tickets"), tickets)
     _write_line_items_sheet(wb.create_sheet("Line Items"), tickets)
+    _write_raw_extraction_sheet(wb.create_sheet("Raw Extraction"), tickets)
     _write_legend_sheet(wb.create_sheet("Legend"))
 
     buf = io.BytesIO()
