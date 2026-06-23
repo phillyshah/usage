@@ -107,6 +107,11 @@ class _LocalBackend:
         with self._lock:
             return self._read(table)
 
+    def table_stats(self, table: str, stamp_col: str = "ingested_at") -> dict:
+        rows = self.select(table)
+        stamps = [r.get(stamp_col) for r in rows if r.get(stamp_col)]
+        return {"rows": len(rows), "updated_at": max(stamps) if stamps else None}
+
     def update_where(self, table: str, key: str, value: Any, patch: dict) -> int:
         with self._lock:
             rows = self._read(table)
@@ -166,6 +171,14 @@ class _SupabaseBackend:
 
     def select(self, table: str) -> list[dict]:
         return self.client.table(table).select("*").execute().data or []
+
+    def table_stats(self, table: str, stamp_col: str = "ingested_at") -> dict:
+        count_res = self.client.table(table).select("*", count="exact").limit(0).execute()
+        n = count_res.count or 0
+        stamp_res = (self.client.table(table).select(stamp_col)
+                     .order(stamp_col, desc=True).limit(1).execute())
+        stamp = (stamp_res.data or [{}])[0].get(stamp_col)
+        return {"rows": n, "updated_at": stamp}
 
     def update_where(self, table: str, key: str, value: Any, patch: dict) -> int:
         res = self.client.table(table).update(patch).eq(key, value).execute()
@@ -252,17 +265,12 @@ class Database:
 
     def masters_freshness(self) -> dict:
         """Actual current state of each masters table (row count + newest
-        ``ingested_at``), independent of the masters_ingests log which only
-        reflects the most recent upload."""
-        def _stat(table: str) -> dict:
-            sel = self.backend.select(table)
-            stamps = [r.get("ingested_at") for r in sel if r.get("ingested_at")]
-            return {"rows": len(sel), "updated_at": max(stamps) if stamps else None}
-
+        ingested_at). Uses table_stats() so Supabase returns the real count
+        via the count=exact hint rather than the 1000-row select default."""
         return {
-            "gtin": _stat("reference_gtin"),
-            "part_info": _stat("reference_part_info"),
-            "surgeon": _stat("reference_surgeons"),
+            "gtin":      self.backend.table_stats("reference_gtin"),
+            "part_info": self.backend.table_stats("reference_part_info"),
+            "surgeon":   self.backend.table_stats("reference_surgeons"),
         }
 
     def sku_for_gtin(self, gtin: str) -> dict | None:
