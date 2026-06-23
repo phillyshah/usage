@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.4.0",
+        "date": "2026-06-23",
+        "notes": [
+            "Uploading tickets is much faster: the slow image-cleanup step that "
+            "ran on every upload was removed — it wasn't needed for privacy "
+            "masking and was actually making barcodes harder to read",
+            "Extracting a batch is much faster: tickets are now processed in "
+            "parallel instead of one at a time, and each ticket's results are "
+            "saved in a single write instead of dozens of separate ones",
+        ],
+    },
     {
         "version": "2.3.0",
         "date": "2026-06-23",
