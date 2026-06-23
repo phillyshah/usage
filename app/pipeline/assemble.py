@@ -11,7 +11,7 @@ import json
 import re
 
 from app.config import settings
-from app.db import db
+from app.db import db, new_id
 from app.pipeline import confidence as conf
 from app.pipeline.reference import resolve_part
 
@@ -312,37 +312,35 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             if cm.get("line_total") == "medium":
                 cm["line_total"] = "high"
 
-    # ---- persist line items + per-field snapshots ----
-    persisted_lines = []
+    # ---- persist line items + per-field snapshots (bulk, 2 round-trips) ----
+    # Pre-generate line ids so the field-extraction rows can reference them
+    # without a per-line insert/return cycle.
+    line_rows: list[dict] = []
+    fe_rows: list[dict] = []
     for row, cmap, raw in zip(lines, line_conf, raw_blobs):
-        store_row = {k: row[k] for k in (
-            "ticket_id", "ref", "gtin", "description", "size", "lot", "qty",
-            "mfg_date", "expiry_date", "unit_price", "line_total", "flags",
-        )}
-        created = db.create_line_item(store_row)
-        line_id = created["line_id"]
-        persisted_lines.append(created)
-        # Raw extraction snapshot (one JSON row per line, source="raw") — read
-        # back by the Raw Extraction sheet. Single insert keeps it cheap.
-        db.add_field_extraction({
-            "ticket_id": ticket_id,
+        line_id = new_id()
+        line_rows.append({
             "line_id": line_id,
-            "field_name": "raw_blob",
-            "orig_value": json.dumps(raw),
-            "confidence": "high",
-            "source": "raw",
+            **{k: row[k] for k in (
+                "ticket_id", "ref", "gtin", "description", "size", "lot", "qty",
+                "mfg_date", "expiry_date", "unit_price", "line_total", "flags",
+            )},
+        })
+        # Raw extraction snapshot (source="raw") read back by the Raw sheet.
+        fe_rows.append({
+            "ticket_id": ticket_id, "line_id": line_id, "field_name": "raw_blob",
+            "orig_value": json.dumps(raw), "confidence": "high", "source": "raw",
         })
         for fname in LINE_FIELDS:
-            db.add_field_extraction({
-                "ticket_id": ticket_id,
-                "line_id": line_id,
-                "field_name": fname,
+            fe_rows.append({
+                "ticket_id": ticket_id, "line_id": line_id, "field_name": fname,
                 "orig_value": None if row.get(fname) is None else str(row.get(fname)),
-                "confidence": cmap.get(fname, "low"),
-                "source": _source_for(fname),
+                "confidence": cmap.get(fname, "low"), "source": _source_for(fname),
             })
 
-    # ---- persist ticket header + snapshots ----
+    db.create_line_items(line_rows)
+
+    # ---- persist ticket header ----
     ticket_patch = {
         "entity": header_vals.get("entity"),
         "surgery_date": header_vals.get("surgery_date"),
@@ -359,16 +357,17 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     }
     db.update_ticket(ticket_id, ticket_patch)
     for fname in TICKET_FIELDS:
-        db.add_field_extraction({
-            "ticket_id": ticket_id,
-            "line_id": None,
-            "field_name": fname,
+        fe_rows.append({
+            "ticket_id": ticket_id, "line_id": None, "field_name": fname,
             "orig_value": None if header_vals.get(fname) is None else str(header_vals.get(fname)),
             "confidence": header_conf.get(fname, "low"),
             "source": "vision" if fname not in ("sum_line_totals",) else "computed",
         })
 
-    return {"ticket_id": ticket_id, "line_count": len(persisted_lines), "flags": flags}
+    # One bulk insert for every field snapshot on this ticket.
+    db.add_field_extractions(fe_rows)
+
+    return {"ticket_id": ticket_id, "line_count": len(line_rows), "flags": flags}
 
 
 def _source_for(field: str) -> str:

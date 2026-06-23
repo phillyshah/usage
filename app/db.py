@@ -110,6 +110,15 @@ class _LocalBackend:
             self._write(table, rows)
             return row
 
+    def insert_many(self, table: str, new_rows: list[dict]) -> list[dict]:
+        if not new_rows:
+            return []
+        with self._lock:
+            rows = self._read(table)
+            rows.extend(new_rows)
+            self._write(table, rows)
+            return list(new_rows)
+
     def replace_all(self, table: str, rows: list[dict], key_col: str = "id") -> None:
         with self._lock:
             self._write(table, list(rows))
@@ -195,6 +204,17 @@ class _SupabaseBackend:
     def insert(self, table: str, row: dict) -> dict:
         res = self.client.table(table).insert(row).execute()
         return (res.data or [row])[0]
+
+    def insert_many(self, table: str, rows: list[dict]) -> list[dict]:
+        # One round-trip per chunk instead of one per row. PostgREST accepts a
+        # JSON array; chunk to stay well under request-size limits.
+        if not rows:
+            return []
+        out: list[dict] = []
+        for i in range(0, len(rows), 500):
+            res = self.client.table(table).insert(rows[i:i + 500]).execute()
+            out.extend(res.data or [])
+        return out
 
     def replace_all(self, table: str, rows: list[dict], key_col: str = "id") -> None:
         # Full replace: delete every row, then insert in chunks. PostgREST
@@ -528,6 +548,16 @@ class Database:
         row.setdefault("flags", [])
         return self.backend.insert("line_items", row)
 
+    def create_line_items(self, rows: list[dict]) -> list[dict]:
+        """Bulk-create line items in one round-trip (defaults applied per row)."""
+        for r in rows:
+            r.setdefault("line_id", new_id())
+            r.setdefault("created_at", _now_iso())
+            r.setdefault("flags", [])
+        if rows:
+            self.backend.insert_many("line_items", rows)
+        return rows
+
     def lines_for_ticket(self, ticket_id: str) -> list[dict]:
         return self.backend.find_all("line_items", "ticket_id", ticket_id)
 
@@ -541,6 +571,13 @@ class Database:
     def add_field_extraction(self, row: dict) -> None:
         row.setdefault("created_at", _now_iso())
         self.backend.insert("field_extractions", row)
+
+    def add_field_extractions(self, rows: list[dict]) -> None:
+        """Bulk-insert per-field snapshots in one round-trip."""
+        for r in rows:
+            r.setdefault("created_at", _now_iso())
+        if rows:
+            self.backend.insert_many("field_extractions", rows)
 
     def field_extractions_for_ticket(self, ticket_id: str) -> list[dict]:
         # The highest-volume table (~10 rows per line item). MUST push the

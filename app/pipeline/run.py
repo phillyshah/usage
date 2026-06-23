@@ -12,6 +12,7 @@ Batch processing (`run_batch`) is used by POST /batches/run and the scheduler:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from app.db import db
 from app.pipeline import assemble, barcode, preprocess, vision
@@ -28,12 +29,13 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
     Raw bytes live only in memory here; only the redacted image is ever stored.
     """
     img = preprocess.decode_image(data)
-    cleaned = preprocess.preprocess(img)
-    template = detect_template(cleaned if cleaned is not None else img, filename)
-
-    redacted, located = redact_patient_region(
-        cleaned if cleaned is not None else img, template
-    )
+    # No heavy enhancement here: redaction needs only the template geometry, and
+    # storing the *original* (minus the patient box) keeps the DataMatrix and
+    # printed text crisp for extraction — denoising both costs seconds per upload
+    # and degrades barcode decoding. (FIELD_GUIDE §9 still holds: we store only
+    # the redacted image, never the raw one.)
+    template = detect_template(img, filename)
+    redacted, located = redact_patient_region(img, template)
 
     if not located:
         # Fail safe: cannot prove PHI is masked -> manual queue, store nothing.
@@ -142,12 +144,20 @@ def run_batch(batch_id: str | None = None) -> dict:
         # Re-run on an already-processed batch: include its tickets for the sheet.
         pending = []
 
-    for ticket in pending:
+    # Process tickets concurrently: each ticket's work is barcode decode (native,
+    # releases the GIL), one vision API call (network), and bulk DB writes
+    # (network) — all I/O-bound, so threads overlap the latency. Capped to keep
+    # the vision API within sane concurrency.
+    def _safe_process(ticket: dict) -> None:
         try:
             process_ticket(ticket)
         except Exception as e:  # pragma: no cover
             log.exception("failed to process ticket %s: %s", ticket.get("ticket_id"), e)
             db.update_ticket(ticket["ticket_id"], {"flags": [f"Processing error: {e}"]})
+
+    if pending:
+        with ThreadPoolExecutor(max_workers=min(6, len(pending))) as ex:
+            list(ex.map(_safe_process, pending))
 
     # Determine the batch to render.
     if batch_id is None:
