@@ -129,7 +129,31 @@ a { color: var(--teal-600); }
 }
 
 /* ----------------------------- Layout ---------------------------------- */
-.main-grid { padding-top: var(--s-7); padding-bottom: var(--s-9); display: grid; gap: var(--s-6); }
+.main-grid { padding-bottom: var(--s-9); display: grid; gap: var(--s-6); }
+
+/* ----------------------------- Tabs ------------------------------------ */
+/* Segmented control sitting above the two pipeline panels. */
+.tabs {
+  display: inline-flex; gap: var(--s-1);
+  margin: var(--s-7) 0 var(--s-6);
+  padding: var(--s-1);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-sm);
+}
+.tab {
+  appearance: none; border: none; background: transparent;
+  padding: var(--s-2) var(--s-5); min-height: 40px;
+  border-radius: var(--r-pill);
+  font-weight: 600; color: var(--ink-500); cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.tab:hover { color: var(--ink-700); }
+.tab[aria-selected="true"] { background: var(--teal-600); color: #fff; }
+.tab:focus-visible { box-shadow: var(--focus); outline: none; }
+
+.tab-panel[hidden] { display: none; }
 
 /* ----------------------------- Cards ----------------------------------- */
 .card {
@@ -479,9 +503,42 @@ a { color: var(--teal-600); }
 .ref-status .ref-status-counts { color: var(--ink-500); }
 .ref-status.is-empty { background: var(--bg); border-color: var(--line); color: var(--ink-500); }
 
+/* ----------------------- Reference data tiles -------------------------- */
+.reference-grid {
+  display: grid; gap: var(--s-6); margin-top: var(--s-6);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ref-tile {
+  display: flex; flex-direction: column; gap: var(--s-3);
+  padding: var(--s-5);
+  border: 1px solid var(--line); border-radius: var(--r-md);
+  background: var(--bg);
+}
+.ref-tile-title { font-size: 1.1rem; letter-spacing: -.01em; }
+.ref-tile-help { color: var(--ink-500); font-size: .92rem; }
+.ref-tile-form { display: grid; gap: var(--s-4); }
+
+/* Per-tile freshness line — same look as the old reference-log status. */
+.ref-fresh {
+  display: flex; align-items: baseline; gap: var(--s-2); flex-wrap: wrap;
+  padding: var(--s-2) var(--s-3);
+  background: var(--teal-050);
+  border: 1px solid var(--teal-100);
+  border-radius: var(--r-sm);
+  font-size: .85rem; color: var(--ink-700);
+}
+.ref-fresh:empty { display: none; }
+.ref-fresh .ref-status-when { font-weight: 600; color: var(--teal-700); }
+.ref-fresh .ref-status-counts { color: var(--ink-500); }
+.ref-fresh.is-empty { background: var(--bg); border-color: var(--line); color: var(--ink-500); }
+
+/* Single-stat result for the masters tiles. */
+.stat-grid-1 { grid-template-columns: 1fr; max-width: 180px; }
+
 /* ----------------------------- Responsive ------------------------------ */
 @media (max-width: 860px) {
   .secondary-grid { grid-template-columns: 1fr; }
+  .reference-grid { grid-template-columns: 1fr; }
   .stat-grid { grid-template-columns: 1fr; }
   .header-inner { flex-wrap: wrap; }
   .step-card { padding: var(--s-6); }

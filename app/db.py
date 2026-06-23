@@ -250,6 +250,21 @@ class Database:
         """True once the product/surgeon masters have been loaded at least once."""
         return bool(self.backend.select("reference_gtin"))
 
+    def masters_freshness(self) -> dict:
+        """Actual current state of each masters table (row count + newest
+        ``ingested_at``), independent of the masters_ingests log which only
+        reflects the most recent upload."""
+        def _stat(table: str) -> dict:
+            sel = self.backend.select(table)
+            stamps = [r.get("ingested_at") for r in sel if r.get("ingested_at")]
+            return {"rows": len(sel), "updated_at": max(stamps) if stamps else None}
+
+        return {
+            "gtin": _stat("reference_gtin"),
+            "part_info": _stat("reference_part_info"),
+            "surgeon": _stat("reference_surgeons"),
+        }
+
     def sku_for_gtin(self, gtin: str) -> dict | None:
         """Decoded (01) GTIN-14 -> product master row (SKU = Ref Number)."""
         if not gtin:

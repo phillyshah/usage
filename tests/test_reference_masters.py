@@ -59,8 +59,11 @@ def test_bundled_masters_stamped_with_snapshot_date():
     """The bundled seed records the snapshot's as-of date (reference/MASTERS_VERSION),
     not the load time, so the freshness banner reflects the data date."""
     load_bundled_masters()
-    latest = db.latest_masters_ingest()
-    assert latest["ingested_at"] == bundled_as_of()
+    # The bundled seed records an ingest stamped with the snapshot date. Assert
+    # such a stamp exists rather than that it is the global-latest ingest, so the
+    # check is independent of other tests that upload masters (which stamp now()).
+    stamps = [r.get("ingested_at") for r in db.backend.select("masters_ingests")]
+    assert bundled_as_of() in stamps
     assert bundled_as_of().startswith("2026-06-23")
 
 
