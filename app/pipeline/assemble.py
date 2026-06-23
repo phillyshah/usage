@@ -8,6 +8,7 @@ single source of truth the sheet writer reads to colour cells.
 from __future__ import annotations
 
 import json
+import re
 
 from app.config import settings
 from app.db import db
@@ -64,6 +65,9 @@ def _c(field: dict | None) -> str:
     return (field.get("confidence") or "low").lower()
 
 
+_MONEY_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
 def _num(x):
     if x in (None, ""):
         return None
@@ -71,6 +75,32 @@ def _num(x):
         return float(x)
     except (TypeError, ValueError):
         return None
+
+
+def _money(x):
+    """Parse a handwritten/printed money value into a float.
+
+    Tolerates what the vision read may carry despite the JSON instruction:
+    a '$' sign, thousands commas, surrounding text, and accounting parentheses
+    for negatives ('($900)'). '$1,900.00' -> 1900.0, '1,900' -> 1900.0,
+    'Ø'/'n/a'/'' -> None. Unparseable -> None (cell goes red, never a wrong number).
+    """
+    if x is None:
+        return None
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip()
+    if not s:
+        return None
+    neg = s.startswith("(") and s.endswith(")")
+    s = s.replace(",", "")
+    m = _MONEY_RE.search(s)
+    if not m:
+        return None
+    val = float(m.group())
+    return -val if neg else val
 
 
 def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> dict:
@@ -110,8 +140,8 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             elif str(learned_rep).strip().lower() == str(header_vals["rep"]).strip().lower():
                 header_conf["rep"] = "high"
 
-    freight = _num(_v(vision.get("freight")))
-    grand_total = _num(_v(vision.get("grand_total")))
+    freight = _money(_v(vision.get("freight")))
+    grand_total = _money(_v(vision.get("grand_total")))
     header_vals["freight"] = freight
     header_conf["freight"] = conf.score_field(
         {"vision": freight, "vision_conf": _c(vision.get("freight"))}
@@ -163,7 +193,7 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         # One row per physical unit (per label/lot): Quantity is always 1
         # (FIELD_GUIDE §6). A REF used N times yields N rows, one per lot.
         qty = 1
-        unit_price = _num(_v(vline.get("unit_price")))
+        unit_price = _money(_v(vline.get("unit_price")))
 
         # Hospital price memory: suggestion only, never override.
         price_conf = conf.score_field(
@@ -262,14 +292,25 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     header_vals["sum_line_totals"] = sum_line_totals
     header_conf["sum_line_totals"] = "high" if sum_line_totals is not None else "low"
 
-    # If totals don't reconcile, drop price/line_total cells to amber for review.
-    if any("Grand total" in f for f in flags):
+    # Reconciliation is an independent cross-check on the handwritten prices.
+    totals_off = any("Grand total" in f for f in flags)
+    if totals_off:
+        # Don't trust the prices if they don't add up — amber for review.
         header_conf["grand_total"] = "medium"
         for cm in line_conf:
             if cm.get("unit_price") == "high":
                 cm["unit_price"] = "medium"
             if cm.get("line_total") == "high":
                 cm["line_total"] = "medium"
+    elif grand_total is not None:
+        # Line prices sum to the handwritten Grand Total -> that agreement
+        # validates them (spec: independent sources agree -> high).
+        header_conf["grand_total"] = "high"
+        for cm in line_conf:
+            if cm.get("unit_price") == "medium":
+                cm["unit_price"] = "high"
+            if cm.get("line_total") == "medium":
+                cm["line_total"] = "high"
 
     # ---- persist line items + per-field snapshots ----
     persisted_lines = []

@@ -50,14 +50,27 @@ For each device label, read the PRINTED catalogue/reference number and lot:
     "MO-MSFC-52/MM"). It is printed text, usually labelled "REF" — read it exactly,
     character for character; do not guess or expand it.
   - "lot": the lot/batch number printed on the label (usually labelled "LOT").
-  - "unit_price": the handwritten price near that label.
+  - "unit_price": the HANDWRITTEN price written near that label, in or next to the
+    "Price" box. See the price rules below.
   - "wasted": true if a handwritten "W" or "wasted" appears near the component
     (the item is still used — just mark it); otherwise false.
 Read these from the printed label text even when a barcode is present. Do NOT
 provide a description — that is looked up separately from the reference tables.
 
-Dates as ISO YYYY-MM-DD. Money as numbers without symbols. "lines" is ordered
-top-to-bottom; skip empty slots that read "Place Implant Label".
+Price rules (these are handwritten and the most important figures on the ticket):
+  - Return the numeric amount only: no "$", no commas, no words. "$1,900.00" -> 1900,
+    "1,900" -> 1900, "68" -> 68. Keep cents if written ("68.50" -> 68.5).
+  - A price that is crossed out / struck through, or written as "0", "Ø", "∅", "-",
+    or "N/C" means NO CHARGE: return 0 for that line's unit_price (do not omit the line).
+  - Read each price for the label it sits beside; keep "lines" ordered top-to-bottom
+    and align each price to its own label. Skip empty slots that read
+    "Place Implant Label".
+  - "grand_total": the handwritten total, usually bottom-right next to "Grand Total".
+  - "freight": the handwritten "Freight/Delivery Fee" if present, else null.
+  - If unsure of a digit, set a lower confidence rather than guessing — the line
+    prices are reconciled against the grand total downstream.
+
+Dates as ISO YYYY-MM-DD. "lines" is ordered top-to-bottom.
 """
 
 _EMPTY = {
