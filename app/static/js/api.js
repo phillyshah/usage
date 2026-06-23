@@ -134,6 +134,18 @@ export const api = {
   },
 
   /**
+   * POST /reference/masters (multipart): field "files" (the file) + form
+   * field "kind" = "gtin" | "part_info" | "surgeon".
+   * -> 200 {gtin_rows, part_rows, surgeon_rows} (routed one int, others null)
+   */
+  uploadMaster(kind, file) {
+    const fd = new FormData();
+    fd.append("files", file, file.name);
+    fd.append("kind", kind);
+    return request("/reference/masters", { method: "POST", body: fd });
+  },
+
+  /**
    * GET /metrics/auto-resolve?weeks=N -> [{week, pct_confident}]
    */
   autoResolveMetrics(weeks = 8) {

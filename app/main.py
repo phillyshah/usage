@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, UploadFile
+from fastapi import Body, FastAPI, File, Form, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -228,22 +228,42 @@ async def reference_log(file: UploadFile = File(...)):
 
 
 @app.post("/reference/masters")
-async def reference_masters(files: list[UploadFile] = File(...)):
+async def reference_masters(
+    files: list[UploadFile] = File(...),
+    kind: str | None = Form(default=None),
+):
     """Full-replace the product/surgeon masters. Accepts Excel (.xlsx, the
-    production format) or CSV, routed by filename: GTIN_Codes, part_info,
+    production format) or CSV.
+
+    Routing: if an explicit ``kind`` (one of "gtin", "part_info", "surgeon") is
+    given, ALL uploaded files go to that one master regardless of filename.
+    Otherwise files are routed by filename substring: GTIN_Codes, part_info,
     surgeon_info (any subset accepted)."""
     from app.learning.ingest_reference import ingest_masters
 
+    _KIND_TO_KWARG = {"gtin": "gtin", "part_info": "part_info", "surgeon": "surgeon_info"}
+
     kwargs: dict = {}
-    for f in files:
-        name = (f.filename or "").lower()
-        data = await f.read()
-        if "gtin" in name:
-            kwargs["gtin"] = data
-        elif "part" in name:
-            kwargs["part_info"] = data
-        elif "surgeon" in name:
-            kwargs["surgeon_info"] = data
+    if kind:
+        kwarg = _KIND_TO_KWARG.get(kind)
+        if kwarg is None:
+            return JSONResponse(
+                {"detail": f"Invalid kind '{kind}' (expect one of: "
+                           f"{', '.join(_KIND_TO_KWARG)})."},
+                status_code=400,
+            )
+        for f in files:
+            kwargs[kwarg] = await f.read()
+    else:
+        for f in files:
+            name = (f.filename or "").lower()
+            data = await f.read()
+            if "gtin" in name:
+                kwargs["gtin"] = data
+            elif "part" in name:
+                kwargs["part_info"] = data
+            elif "surgeon" in name:
+                kwargs["surgeon_info"] = data
     if not kwargs:
         return JSONResponse(
             {"detail": "No recognized masters file (expect GTIN_Codes, part_info, "
@@ -257,9 +277,9 @@ async def reference_masters(files: list[UploadFile] = File(...)):
 
 @app.get("/reference/status")
 def reference_status():
-    """When the Expiry Log + masters were last updated (for the UI banner)."""
+    """Per-sheet freshness for the UI banner: the Expiry Log plus each of the
+    three reference masters (actual current table counts, not last-upload deltas)."""
     latest = db.latest_log_ingest()
-    masters = db.latest_masters_ingest()
     out: dict = {"loaded": bool(latest)}
     if latest:
         out.update({
@@ -268,13 +288,15 @@ def reference_status():
             "unique_parts": latest.get("unique_parts"),
             "unique_lots": latest.get("unique_lots"),
         })
-    if masters:
-        out["masters"] = {
-            "updated_at": masters.get("ingested_at"),
-            "gtin_rows": masters.get("gtin_rows"),
-            "part_rows": masters.get("part_rows"),
-            "surgeon_rows": masters.get("surgeon_rows"),
-        }
+    # New, explicit per-sheet objects (top-level fields above kept for compat).
+    out["log"] = {
+        "loaded": bool(latest),
+        "updated_at": latest.get("ingested_at") if latest else None,
+        "row_count": latest.get("row_count") if latest else None,
+        "unique_parts": latest.get("unique_parts") if latest else None,
+        "unique_lots": latest.get("unique_lots") if latest else None,
+    }
+    out["masters"] = db.masters_freshness()
     return out
 
 

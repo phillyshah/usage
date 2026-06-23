@@ -89,7 +89,23 @@
   </section>
 
   <!-- ===================== MAIN ===================== -->
-  <main id="main" class="container main-grid">
+  <main id="main" class="container">
+
+    <!-- Top-level segmented control: two independent pipelines. -->
+    <div class="tabs" role="tablist" aria-label="Choose a workflow">
+      <button type="button" class="tab" id="tab-tickets" role="tab"
+              aria-selected="true" aria-controls="panel-tickets" tabindex="0">
+        Process Tickets
+      </button>
+      <button type="button" class="tab" id="tab-reference" role="tab"
+              aria-selected="false" aria-controls="panel-reference" tabindex="-1">
+        Reference Data
+      </button>
+    </div>
+
+    <!-- ===================== PANEL 1: Process Tickets ===================== -->
+    <div id="panel-tickets" class="tab-panel main-grid" role="tabpanel"
+         aria-labelledby="tab-tickets" tabindex="0">
 
     <!-- ---------- STEP 1: Upload tickets ---------- -->
     <section class="card step-card" aria-labelledby="step1-title">
@@ -254,32 +270,6 @@
     <!-- ===================== SECONDARY ===================== -->
     <div class="secondary-grid">
 
-      <!-- Reference log -->
-      <section class="card secondary-card" aria-labelledby="ref-title">
-        <h2 class="secondary-title" id="ref-title">Update the reference log</h2>
-        <p class="step-help">Optional. Upload the latest Expiry Log spreadsheet so the tool has the newest device information.</p>
-
-        <div id="reference-status" class="ref-status" aria-live="polite"></div>
-
-        <form id="reference-form" class="step-body">
-          <label class="dropzone dropzone-sm" id="reference-dropzone" for="reference-input" tabindex="0"
-                 role="button" aria-describedby="reference-hint">
-            <span class="dropzone-title">Drag the Expiry Log here</span>
-            <span class="dropzone-sub" id="reference-hint">or <span class="link-like">choose one .xlsx file</span></span>
-            <input id="reference-input" class="visually-hidden" type="file"
-                   accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
-          </label>
-
-          <ul class="file-list" id="reference-file-list" aria-live="polite"></ul>
-
-          <div class="step-actions">
-            <button type="submit" id="reference-submit" class="btn btn-secondary" disabled>Update log</button>
-          </div>
-        </form>
-
-        <div id="reference-result" class="result-area" hidden></div>
-      </section>
-
       <!-- Past batches -->
       <section class="card secondary-card" aria-labelledby="batches-title">
         <div class="secondary-head">
@@ -298,6 +288,111 @@
       </section>
 
     </div>
+    </div><!-- /#panel-tickets -->
+
+    <!-- ===================== PANEL 2: Reference Data ===================== -->
+    <div id="panel-reference" class="tab-panel main-grid" role="tabpanel"
+         aria-labelledby="tab-reference" tabindex="0" hidden>
+
+      <section class="card" aria-labelledby="reference-intro-title">
+        <h2 class="step-title" id="reference-intro-title">Reference data</h2>
+        <p class="step-help">These are the source/lookup sheets the tool checks each ticket against. They change rarely — usually refreshed monthly — and are kept separate from your daily ticket processing. Upload a new version of any sheet below and it takes effect immediately for new batches.</p>
+
+        <!-- Four independent upload tiles, one per lookup sheet. -->
+        <div class="reference-grid">
+
+          <!-- GTIN Codes -->
+          <div class="ref-tile" aria-labelledby="gtin-title">
+            <h3 class="ref-tile-title" id="gtin-title">GTIN Codes</h3>
+            <p class="ref-tile-help">Product master — maps GTIN to SKU.</p>
+            <div id="gtin-status" class="ref-fresh" aria-live="polite"></div>
+
+            <form id="gtin-form" class="ref-tile-form">
+              <label class="dropzone dropzone-sm" id="gtin-dropzone" for="gtin-input" tabindex="0"
+                     role="button" aria-describedby="gtin-hint">
+                <span class="dropzone-title">Drag the GTIN sheet here</span>
+                <span class="dropzone-sub" id="gtin-hint">or <span class="link-like">choose one .xlsx or .csv file</span></span>
+                <input id="gtin-input" class="visually-hidden" type="file"
+                       accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" />
+              </label>
+              <ul class="file-list" id="gtin-file-list" aria-live="polite"></ul>
+              <div class="step-actions">
+                <button type="submit" id="gtin-submit" class="btn btn-secondary" disabled>Update GTIN codes</button>
+              </div>
+            </form>
+            <div id="gtin-result" class="result-area" hidden></div>
+          </div>
+
+          <!-- Part Info -->
+          <div class="ref-tile" aria-labelledby="part-title">
+            <h3 class="ref-tile-title" id="part-title">Part Info (Part Type &amp; Category)</h3>
+            <p class="ref-tile-help">Ref Number to Description, Part Type and Category.</p>
+            <div id="part-status" class="ref-fresh" aria-live="polite"></div>
+
+            <form id="part-form" class="ref-tile-form">
+              <label class="dropzone dropzone-sm" id="part-dropzone" for="part-input" tabindex="0"
+                     role="button" aria-describedby="part-hint">
+                <span class="dropzone-title">Drag the Part Info sheet here</span>
+                <span class="dropzone-sub" id="part-hint">or <span class="link-like">choose one .xlsx or .csv file</span></span>
+                <input id="part-input" class="visually-hidden" type="file"
+                       accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" />
+              </label>
+              <ul class="file-list" id="part-file-list" aria-live="polite"></ul>
+              <div class="step-actions">
+                <button type="submit" id="part-submit" class="btn btn-secondary" disabled>Update part info</button>
+              </div>
+            </form>
+            <div id="part-result" class="result-area" hidden></div>
+          </div>
+
+          <!-- Surgeon Info -->
+          <div class="ref-tile" aria-labelledby="surgeon-title">
+            <h3 class="ref-tile-title" id="surgeon-title">Surgeon Info</h3>
+            <p class="ref-tile-help">Surgeon / hospital / region crosswalk.</p>
+            <div id="surgeon-status" class="ref-fresh" aria-live="polite"></div>
+
+            <form id="surgeon-form" class="ref-tile-form">
+              <label class="dropzone dropzone-sm" id="surgeon-dropzone" for="surgeon-input" tabindex="0"
+                     role="button" aria-describedby="surgeon-hint">
+                <span class="dropzone-title">Drag the Surgeon Info sheet here</span>
+                <span class="dropzone-sub" id="surgeon-hint">or <span class="link-like">choose one .xlsx or .csv file</span></span>
+                <input id="surgeon-input" class="visually-hidden" type="file"
+                       accept=".xlsx,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" />
+              </label>
+              <ul class="file-list" id="surgeon-file-list" aria-live="polite"></ul>
+              <div class="step-actions">
+                <button type="submit" id="surgeon-submit" class="btn btn-secondary" disabled>Update surgeon info</button>
+              </div>
+            </form>
+            <div id="surgeon-result" class="result-area" hidden></div>
+          </div>
+
+          <!-- Expiry Log -->
+          <div class="ref-tile" aria-labelledby="expiry-title">
+            <h3 class="ref-tile-title" id="expiry-title">Expiry Log</h3>
+            <p class="ref-tile-help">Lot to expiry validation source.</p>
+            <div id="reference-status" class="ref-fresh" aria-live="polite"></div>
+
+            <form id="reference-form" class="ref-tile-form">
+              <label class="dropzone dropzone-sm" id="reference-dropzone" for="reference-input" tabindex="0"
+                     role="button" aria-describedby="reference-hint">
+                <span class="dropzone-title">Drag the Expiry Log here</span>
+                <span class="dropzone-sub" id="reference-hint">or <span class="link-like">choose one .xlsx file</span></span>
+                <input id="reference-input" class="visually-hidden" type="file"
+                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+              </label>
+              <ul class="file-list" id="reference-file-list" aria-live="polite"></ul>
+              <div class="step-actions">
+                <button type="submit" id="reference-submit" class="btn btn-secondary" disabled>Update Expiry Log</button>
+              </div>
+            </form>
+            <div id="reference-result" class="result-area" hidden></div>
+          </div>
+
+        </div>
+      </section>
+
+    </div><!-- /#panel-reference -->
   </main>
 
   <footer class="site-footer">

@@ -5,9 +5,24 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.1.0",
+        "date": "2026-06-23",
+        "notes": [
+            "The app is now split into two clearly separated workflows you switch "
+            "between with tabs: 'Process Tickets' for the daily photo-to-spreadsheet "
+            "flow, and 'Reference Data' for the lookup sheets — so the two no longer "
+            "get in each other's way",
+            "You can now update each reference lookup sheet directly from the page — "
+            "GTIN Codes, Part Info (Part Type & Category), Surgeon Info, and the "
+            "Expiry Log — each with its own upload tile and 'last updated' line",
+            "Each reference sheet shows how fresh it is (when it was last updated and "
+            "how many rows it has), and updates take effect immediately for new batches",
+        ],
+    },
     {
         "version": "2.0.0",
         "date": "2026-06-22",

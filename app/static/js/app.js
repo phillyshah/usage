@@ -196,9 +196,46 @@ function createPicker({ dropzone, input, listEl, submitBtn, clearBtn, multiple =
 /* Accept helpers */
 const isImage = (f) => /image\/(jpeg|png)/.test(f.type) || /\.(jpe?g|png)$/i.test(f.name);
 const isXlsx = (f) => /\.xlsx$/i.test(f.name) || f.type.includes("spreadsheetml");
+const isSheet = (f) => isXlsx(f) || /\.csv$/i.test(f.name) || f.type.includes("csv");
 
 /* ----------------------------------------------------------- app state */
 const state = { lastBatchId: null };
+
+/* ===================================================================== *
+ *  Top-level tabs — two independent pipelines
+ * ===================================================================== */
+/**
+ * Accessible tablist: one panel visible at a time, roving tabindex, and
+ * arrow-key navigation per the WAI-ARIA tabs pattern.
+ */
+(function initTabs() {
+  const tablist = $('[role="tablist"]');
+  if (!tablist) return;
+  const tabs = Array.from(tablist.querySelectorAll('[role="tab"]'));
+
+  function select(tab, focus = true) {
+    for (const t of tabs) {
+      const active = t === tab;
+      t.setAttribute("aria-selected", String(active));
+      t.tabIndex = active ? 0 : -1;
+      const panel = document.getElementById(t.getAttribute("aria-controls"));
+      if (panel) panel.hidden = !active;
+    }
+    if (focus) tab.focus();
+  }
+
+  tabs.forEach((tab, i) => {
+    tab.addEventListener("click", () => select(tab, false));
+    tab.addEventListener("keydown", (e) => {
+      let next = null;
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") next = tabs[(i + 1) % tabs.length];
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") next = tabs[(i - 1 + tabs.length) % tabs.length];
+      else if (e.key === "Home") next = tabs[0];
+      else if (e.key === "End") next = tabs[tabs.length - 1];
+      if (next) { e.preventDefault(); select(next); }
+    });
+  });
+})();
 
 /* ===================================================================== *
  *  STEP 1 — Upload tickets
@@ -390,21 +427,8 @@ function stat(n, label) {
 }
 
 /* ===================================================================== *
- *  SECONDARY — Reference log
+ *  REFERENCE DATA — four independent lookup-sheet upload tiles
  * ===================================================================== */
-const referenceResult = $("#reference-result");
-const referencePicker = createPicker({
-  dropzone: $("#reference-dropzone"),
-  input: $("#reference-input"),
-  listEl: $("#reference-file-list"),
-  submitBtn: $("#reference-submit"),
-  clearBtn: null,
-  multiple: false,
-  accept: isXlsx,
-});
-
-const referenceStatus = $("#reference-status");
-
 function fmtWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
@@ -413,65 +437,131 @@ function fmtWhen(iso) {
     " at " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
-async function loadReferenceStatus() {
-  if (!referenceStatus) return;
-  try {
-    const s = await api.referenceStatus();
-    referenceStatus.classList.remove("is-empty");
-    const children = [];
-    if (!s || !s.loaded) {
-      referenceStatus.classList.add("is-empty");
-      children.push(el("span", { text: "No Expiry Log loaded yet — upload one below to get started." }));
-    } else {
-      children.push(
-        el("span", { class: "ref-status-when", text: `Expiry Log updated ${fmtWhen(s.updated_at)}` }),
-        el("span", { class: "ref-status-counts", text:
-          `· ${Number(s.unique_parts || 0).toLocaleString()} parts, ${Number(s.unique_lots || 0).toLocaleString()} lots` }),
-      );
-    }
-    if (s && s.masters && s.masters.updated_at) {
-      const m = s.masters;
-      children.push(
-        el("span", { class: "ref-status-when", text: ` · Masters updated ${fmtWhen(m.updated_at)}` }),
-        el("span", { class: "ref-status-counts", text:
-          `· ${Number(m.gtin_rows || 0).toLocaleString()} GTINs, ${Number(m.part_rows || 0).toLocaleString()} parts, ${Number(m.surgeon_rows || 0).toLocaleString()} surgeons` }),
-      );
-    }
-    referenceStatus.replaceChildren(...children);
-  } catch {
-    referenceStatus.replaceChildren(); // hidden via :empty
+/**
+ * Paint a tile's freshness line: "Updated <date> · N rows" when a sheet has
+ * been uploaded, or a friendly "Not uploaded yet" state when it never has.
+ * `extra` (optional) appends e.g. parts/lots counts for the Expiry Log.
+ */
+function renderFreshness(node, rows, updatedAt, extra = "") {
+  if (!node) return;
+  node.classList.remove("is-empty");
+  const n = Number(rows || 0);
+  if (!updatedAt && n === 0) {
+    node.classList.add("is-empty");
+    node.replaceChildren(el("span", { text: "Not uploaded yet" }));
+    return;
   }
+  const children = [
+    el("span", { class: "ref-status-when", text: `Updated ${fmtWhen(updatedAt)}` }),
+    el("span", { class: "ref-status-counts", text:
+      `· ${n.toLocaleString()} ${n === 1 ? "row" : "rows"}${extra}` }),
+  ];
+  node.replaceChildren(...children);
 }
 
-$("#reference-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!referencePicker.hasFiles()) return;
-  const btn = $("#reference-submit");
-  const file = referencePicker.files[0];
-  btn.disabled = true;
-  const original = btn.textContent;
-  btn.textContent = "Updating…";
-  try {
-    const data = await api.uploadReferenceLog(file);
-    const grid = el("div", { class: "stat-grid" }, [
-      stat(num(data, "row_count"), "rows"),
-      stat(num(data, "unique_parts"), "unique parts"),
-      stat(num(data, "unique_lots"), "unique lots"),
-    ]);
-    renderNotice(referenceResult, "success", "Reference log updated", [grid]);
-    toast("success", "Reference log updated", "The tool now has your latest device info.");
-    referencePicker.clear();
-    loadReferenceStatus(); // refresh the "last updated" banner
-  } catch (err) {
-    renderNotice(referenceResult, "error", "We couldn't update the reference log",
-      [el("p", { class: "notice-text", text: "Please upload the Expiry Log as a single .xlsx file and try again." })],
-      errorDetail(err));
-    toast("error", "Update failed", "Please try again.");
-    btn.disabled = false;
-  } finally {
-    btn.textContent = original;
-  }
+/**
+ * Wire one reference-data tile: picker + submit handler. `upload` is the api
+ * call (returns the server payload); `onSuccess(data)` builds the success
+ * notice body. Refreshes all freshness lines after a successful upload.
+ */
+function wireRefTile({ prefix, accept, label, upload, onSuccess }) {
+  const resultEl = $(`#${prefix}-result`);
+  const picker = createPicker({
+    dropzone: $(`#${prefix}-dropzone`),
+    input: $(`#${prefix}-input`),
+    listEl: $(`#${prefix}-file-list`),
+    submitBtn: $(`#${prefix}-submit`),
+    clearBtn: null,
+    multiple: false,
+    accept,
+  });
+
+  $(`#${prefix}-form`).addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!picker.hasFiles()) return;
+    const btn = $(`#${prefix}-submit`);
+    const file = picker.files[0];
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Updating…";
+    try {
+      const data = await upload(file);
+      renderNotice(resultEl, "success", `${label} updated`, onSuccess(data));
+      toast("success", `${label} updated`, "Takes effect immediately for new batches.");
+      picker.clear();
+      loadReferenceStatus(); // refresh every tile's freshness line
+    } catch (err) {
+      renderNotice(resultEl, "error", `We couldn't update ${label}`,
+        [el("p", { class: "notice-text", text: "Please check the file and try again." })],
+        errorDetail(err));
+      toast("error", "Update failed", "Please try again.");
+      btn.disabled = false;
+    } finally {
+      btn.textContent = original;
+    }
+  });
+}
+
+/* GTIN / Part Info / Surgeon — routed through the masters endpoint. */
+wireRefTile({
+  prefix: "gtin", accept: isSheet, label: "GTIN codes",
+  upload: (f) => api.uploadMaster("gtin", f),
+  onSuccess: (d) => [el("div", { class: "stat-grid stat-grid-1" }, [stat(num(d, "gtin_rows"), "rows")])],
 });
+wireRefTile({
+  prefix: "part", accept: isSheet, label: "Part info",
+  upload: (f) => api.uploadMaster("part_info", f),
+  onSuccess: (d) => [el("div", { class: "stat-grid stat-grid-1" }, [stat(num(d, "part_rows"), "rows")])],
+});
+wireRefTile({
+  prefix: "surgeon", accept: isSheet, label: "Surgeon info",
+  upload: (f) => api.uploadMaster("surgeon", f),
+  onSuccess: (d) => [el("div", { class: "stat-grid stat-grid-1" }, [stat(num(d, "surgeon_rows"), "rows")])],
+});
+
+/* Expiry Log — its own endpoint, .xlsx only, with parts/lots stats. */
+wireRefTile({
+  prefix: "reference", accept: isXlsx, label: "Expiry Log",
+  upload: (f) => api.uploadReferenceLog(f),
+  onSuccess: (d) => [el("div", { class: "stat-grid" }, [
+    stat(num(d, "row_count"), "rows"),
+    stat(num(d, "unique_parts"), "unique parts"),
+    stat(num(d, "unique_lots"), "unique lots"),
+  ])],
+});
+
+/* Freshness elements, one per tile. */
+const gtinStatus = $("#gtin-status");
+const partStatus = $("#part-status");
+const surgeonStatus = $("#surgeon-status");
+const referenceStatus = $("#reference-status");
+
+/**
+ * Read the /reference/status payload (new shape) and populate every tile's
+ * freshness line. Handles never-uploaded sheets (rows 0 / updated_at null).
+ */
+async function loadReferenceStatus() {
+  try {
+    const s = await api.referenceStatus();
+    const m = (s && s.masters) || {};
+    const gtin = m.gtin || {};
+    const part = m.part_info || {};
+    const surgeon = m.surgeon || {};
+    const log = (s && s.log) || s || {};
+
+    renderFreshness(gtinStatus, gtin.rows, gtin.updated_at);
+    renderFreshness(partStatus, part.rows, part.updated_at);
+    renderFreshness(surgeonStatus, surgeon.rows, surgeon.updated_at);
+
+    const parts = Number(log.unique_parts || 0);
+    const lots = Number(log.unique_lots || 0);
+    const extra = (parts || lots)
+      ? ` · ${parts.toLocaleString()} parts, ${lots.toLocaleString()} lots` : "";
+    renderFreshness(referenceStatus, log.row_count, log.updated_at, extra);
+  } catch {
+    // Leave whatever is shown; tiles stay usable even if status fails.
+  }
+}
 
 /* ===================================================================== *
  *  SECONDARY — Past batches
