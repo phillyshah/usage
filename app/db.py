@@ -123,6 +123,25 @@ class _LocalBackend:
         stamps = [r.get(stamp_col) for r in rows if r.get(stamp_col)]
         return {"rows": len(rows), "updated_at": max(stamps) if stamps else None}
 
+    def find_all(self, table: str, column: str, value: Any) -> list[dict]:
+        with self._lock:
+            return [r for r in self._read(table) if r.get(column) == value]
+
+    def find_one(self, table: str, column: str, value: Any) -> dict | None:
+        with self._lock:
+            for r in self._read(table):
+                if r.get(column) == value:
+                    return r
+        return None
+
+    def find_one_ci(self, table: str, column: str, value: str) -> dict | None:
+        target = (value or "").strip().upper()
+        with self._lock:
+            for r in self._read(table):
+                if (r.get(column) or "").strip().upper() == target:
+                    return r
+        return None
+
     def update_where(self, table: str, key: str, value: Any, patch: dict) -> int:
         with self._lock:
             rows = self._read(table)
@@ -190,6 +209,25 @@ class _SupabaseBackend:
                      .order(stamp_col, desc=True).limit(1).execute())
         stamp = (stamp_res.data or [{}])[0].get(stamp_col)
         return {"rows": n, "updated_at": stamp}
+
+    def find_all(self, table: str, column: str, value: Any) -> list[dict]:
+        # Predicate pushed to Postgres — never the 1000-row select() cap, and it
+        # uses the table index instead of downloading rows to scan in Python.
+        return self.client.table(table).select("*").eq(column, value).execute().data or []
+
+    def find_one(self, table: str, column: str, value: Any) -> dict | None:
+        rows = (self.client.table(table).select("*").eq(column, value)
+                .limit(1).execute().data)
+        return rows[0] if rows else None
+
+    def find_one_ci(self, table: str, column: str, value: str) -> dict | None:
+        # Case-insensitive exact match. Escape LIKE metacharacters (\ % _) so a
+        # REF/lot code containing them matches literally, then ilike with no
+        # wildcards = a case-insensitive equality test.
+        pat = (value or "").strip().translate({0x5c: "\\\\", 0x25: "\\%", 0x5f: "\\_"})
+        rows = (self.client.table(table).select("*").ilike(column, pat)
+                .limit(1).execute().data)
+        return rows[0] if rows else None
 
     def update_where(self, table: str, key: str, value: Any, patch: dict) -> int:
         res = self.client.table(table).update(patch).eq(key, value).execute()
@@ -304,29 +342,22 @@ class Database:
         }
 
     def sku_for_gtin(self, gtin: str) -> dict | None:
-        """Decoded (01) GTIN-14 -> product master row (SKU = Ref Number)."""
+        """Decoded (01) GTIN-14 -> product master row (SKU = Ref Number).
+
+        Pushes the match to the DB so it works against the full master (the
+        Supabase select() cap of 1000 rows would otherwise miss most GTINs).
+        """
         if not gtin:
             return None
-        key = str(gtin).strip()
-        for r in self.backend.select("reference_gtin"):
-            if (r.get("gtin_14") or "").strip() == key:
-                return r
-        return None
+        return self.backend.find_one("reference_gtin", "gtin_14", str(gtin).strip())
 
     def part_info_for_ref(self, ref: str) -> dict | None:
         """Ref Number -> {description, part_type, category}. Exact match, then
         case-insensitive (trailing +/- are significant and preserved)."""
         if not ref:
             return None
-        rows = self.backend.select("reference_part_info")
-        for r in rows:  # exact first (preserves +/- suffix distinctions)
-            if (r.get("part_number") or "") == ref:
-                return r
-        key = ref.strip().upper()
-        for r in rows:
-            if (r.get("part_number") or "").strip().upper() == key:
-                return r
-        return None
+        return (self.backend.find_one("reference_part_info", "part_number", ref)
+                or self.backend.find_one_ci("reference_part_info", "part_number", ref))
 
     def surgeon_for_key(self, key: str) -> dict | None:
         """<SurgeonLastName><DistCode> (normalized) -> surgeon_info record.
@@ -334,10 +365,10 @@ class Database:
         if not key:
             return None
         k = str(key).strip().upper()
-        matches = [
-            r for r in self.backend.select("reference_surgeons")
-            if (r.get("surgeon_distcode") or "").strip().upper() == k
-        ]
+        matches = self.backend.find_all("reference_surgeons", "surgeon_distcode", k)
+        if not matches:  # keys are normalized upper at ingest; CI guards drift
+            m = self.backend.find_one_ci("reference_surgeons", "surgeon_distcode", k)
+            matches = [m] if m else []
         if not matches:
             return None
         for r in matches:
@@ -349,23 +380,19 @@ class Database:
     def resolve_part_desc(self, ref: str) -> dict | None:
         if not ref:
             return None
-        key = ref.strip().upper()
-        for r in self.backend.select("learning_part_desc"):
-            if (r.get("part_no") or "").strip().upper() == key:
-                return {**r, "from_correction": True}
-        for r in self.backend.select("reference_parts"):
-            if (r.get("part_no") or "").strip().upper() == key:
-                return {**r, "from_correction": False}
+        learned = self.backend.find_one_ci("learning_part_desc", "part_no", ref)
+        if learned:
+            return {**learned, "from_correction": True}
+        p = self.backend.find_one_ci("reference_parts", "part_no", ref)
+        if p:
+            return {**p, "from_correction": False}
         return None
 
     def lot_lookup(self, lot: str) -> dict | None:
         if not lot:
             return None
-        key = lot.strip().upper()
-        for r in self.backend.select("reference_lots"):
-            if (r.get("lot") or "").strip().upper() == key:
-                return r
-        return None
+        return (self.backend.find_one("reference_lots", "lot", lot.strip())
+                or self.backend.find_one_ci("reference_lots", "lot", lot))
 
     def ref_in_log(self, ref: str) -> bool:
         return self.resolve_part_desc(ref) is not None
@@ -403,11 +430,7 @@ class Database:
         )
 
     def learn_gtin_xref(self, gtin: str, part_no: str) -> None:
-        existing = None
-        for r in self.backend.select("learning_gtin_xref"):
-            if r.get("gtin") == gtin:
-                existing = r
-                break
+        existing = self.backend.find_one("learning_gtin_xref", "gtin", gtin)
         confirmations = (existing.get("confirmations", 0) + 1) if existing else 1
         self.backend.upsert(
             "learning_gtin_xref",
@@ -423,22 +446,18 @@ class Database:
     def price_suggestion(self, part_no: str, hospital: str) -> float | None:
         if not (part_no and hospital):
             return None
-        for r in self.backend.select("learning_price"):
-            if r.get("part_no") == part_no and r.get("hospital") == hospital:
+        for r in self.backend.find_all("learning_price", "part_no", part_no):
+            if r.get("hospital") == hospital:
                 return float(r["unit_price"])
         return None
 
     def rep_for_code(self, rep_code: str) -> str | None:
-        for r in self.backend.select("learning_rep_map"):
-            if r.get("rep_code") == rep_code:
-                return r.get("rep_name")
-        return None
+        r = self.backend.find_one("learning_rep_map", "rep_code", rep_code)
+        return r.get("rep_name") if r else None
 
     def ref_for_gtin(self, gtin: str) -> str | None:
-        for r in self.backend.select("learning_gtin_xref"):
-            if r.get("gtin") == gtin:
-                return r.get("part_no")
-        return None
+        r = self.backend.find_one("learning_gtin_xref", "gtin", gtin)
+        return r.get("part_no") if r else None
 
     # ---- batches ----
     def create_batch(self) -> dict:
