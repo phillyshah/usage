@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.2.3"
+VERSION = "2.2.4"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.2.4",
+        "date": "2026-06-23",
+        "notes": [
+            "Buttons for steps that aren't ready yet now appear clearly greyed "
+            "out (not just faintly dimmed), so it's obvious at a glance which "
+            "step you can act on — 'Extract data' and 'Download' stay grey until "
+            "their step is reached",
+        ],
+    },
     {
         "version": "2.2.3",
         "date": "2026-06-23",
