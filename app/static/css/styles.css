@@ -200,8 +200,23 @@ a { color: var(--teal-600); }
 .btn-lg { min-height: 56px; padding: var(--s-4) var(--s-7); font-size: 1.1rem; }
 .btn-sm { min-height: 36px; padding: var(--s-2) var(--s-4); font-size: .9rem; }
 
-.btn:disabled, .btn[aria-disabled="true"] {
-  opacity: .5; cursor: not-allowed; pointer-events: none;
+/* Disabled / not-ready controls: clearly greyed out (never faded teal), so
+   the user can tell a step isn't actionable yet. Targets both native
+   :disabled buttons and aria-disabled anchors. The .btn-primary variants are
+   listed explicitly so the grey background wins over the teal --btn-bg. */
+.btn:disabled, .btn[aria-disabled="true"],
+.btn-primary:disabled, .btn-primary[aria-disabled="true"] {
+  background: var(--line);
+  color: var(--ink-300);
+  border-color: var(--line);
+  box-shadow: none;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.btn-primary:disabled:hover, .btn-primary[aria-disabled="true"]:hover,
+.btn:disabled:hover, .btn[aria-disabled="true"]:hover {
+  background: var(--line);
+  color: var(--ink-300);
 }
 
 /* ----------------------------- Dropzone -------------------------------- */
