@@ -5,9 +5,18 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.2.2"
+VERSION = "2.2.3"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.2.3",
+        "date": "2026-06-23",
+        "notes": [
+            "Re-running 'Extract data' on the same tickets now replaces the "
+            "previous results instead of adding a duplicate set of rows — so "
+            "quantities and totals can't be silently doubled by extracting twice",
+        ],
+    },
     {
         "version": "2.2.2",
         "date": "2026-06-23",
