@@ -26,6 +26,17 @@ from app.supabase_key import detect_key_role, is_privileged_key
 log = logging.getLogger("db")
 
 # Tables we persist in the local backend (mirrors the schema).
+# (table, representative column, migration file) probes for columns/tables added
+# by incremental migrations. schema_check() uses these to detect an un-applied
+# migration before it 500s a live request.
+_SCHEMA_PROBES = [
+    ("tickets", "source_filename", "db/08_add_source_filename.sql"),
+    ("reference_gtin", "gtin_14", "db/09_reference_masters.sql"),
+    ("reference_part_info", "part_number", "db/09_reference_masters.sql"),
+    ("reference_surgeons", "surgeon_distcode", "db/09_reference_masters.sql"),
+    ("masters_ingests", "id", "db/09_reference_masters.sql"),
+]
+
 _LOCAL_TABLES = [
     "app_settings",
     "reference_lots",
@@ -262,6 +273,25 @@ class Database:
     def has_masters(self) -> bool:
         """True once the product/surgeon masters have been loaded at least once."""
         return bool(self.backend.select("reference_gtin"))
+
+    def schema_check(self) -> list[dict]:
+        """Probe columns/tables added by incremental migrations so schema drift
+        (a migration in db/ that was never applied) is caught at startup and via
+        /diag instead of surfacing as a 500 on the first upload.
+
+        Returns a list of problems (empty == schema is current). The offline
+        JSON store has every column implicitly, so it always passes.
+        """
+        if self.offline:
+            return []
+        problems: list[dict] = []
+        for table, column, migration in _SCHEMA_PROBES:
+            try:
+                self.backend.client.table(table).select(column).limit(1).execute()
+            except Exception as exc:  # missing table/column -> PostgREST raises
+                problems.append({"table": table, "column": column,
+                                 "migration": migration, "error": str(exc)})
+        return problems
 
     def masters_freshness(self) -> dict:
         """Actual current state of each masters table (row count + newest
