@@ -2,9 +2,10 @@
 
 Sheets:
   * ``Usage``      — the flat, one-row-per-device-line deliverable the accountant
-                     works in: ``Source Image Filename`` + the 26 columns from
-                     ``reference/output_columns.csv`` (FIELD_GUIDE §5), plus a
-                     trailing ``Notes`` review aid.
+                     works in: columns A..M (``Source Image Filename`` through
+                     ``Expiry Date``), plus a trailing ``Notes`` review aid in
+                     column N. Columns beyond Expiry Date are intentionally not
+                     produced (device/surgeon attributes live on the other sheets).
   * ``Tickets``    — one row per ticket (header reconciliation + round-trip key).
   * ``Line Items`` — one row per device WITH stable Ticket ID / Line ID, the key
                      the corrections re-upload matches on.
@@ -64,25 +65,12 @@ USAGE_COLUMNS = [
     ("Lot Number", "line:lot"),
     ("Ref Number", "line:ref"),
     ("Expiry Date", "line:expiry_date"),
-    ("Invoice No.", "blank"),
-    ("Invoice Date", "blank"),
-    ("SurgeonName", "surg:surgeon_full_name"),
-    ("Distributor", "blank"),
-    ("Distributor Rep", "blank"),
-    ("Sales Rep", "blank"),
-    ("Maxx Sales Manager", "blank"),
-    ("Distributing Company", "blank"),
-    ("Distributor Code", "surg:dist_code"),
-    ("Region", "surg:region"),
-    ("Description", "part:description"),
-    ("Part Type", "part:part_type"),
-    ("Category", "part:category"),
-    ("SAP Part Number", "blank"),
-    ("Notes", "notes"),  # appended review aid (not in output_columns.csv)
+    ("Notes", "notes"),  # column N: review aid (flags/WASTED); not part of the contract
 ]
 
-# The first 27 headers are the contract (Source Image Filename + the 26 columns).
-OUTPUT_CONTRACT_COLUMNS = [h for h, _ in USAGE_COLUMNS[:27]]
+# The deliverable contract is columns A..M (through Expiry Date); everything past
+# that was dropped per the accounting requirement. Notes (column N) is a review aid.
+OUTPUT_CONTRACT_COLUMNS = [h for h, _ in USAGE_COLUMNS[:13]]
 
 TICKET_COLUMNS = [
     ("Ticket ID", None),

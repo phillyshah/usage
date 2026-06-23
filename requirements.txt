@@ -12,4 +12,5 @@ opencv-python-headless
 pylibdmtx
 pyzbar
 biip
+pypdfium2
 apscheduler

@@ -195,11 +195,19 @@ function createPicker({ dropzone, input, listEl, submitBtn, clearBtn, multiple =
 
 /* Accept helpers */
 const isImage = (f) => /image\/(jpeg|png)/.test(f.type) || /\.(jpe?g|png)$/i.test(f.name);
+// Step 1 accepts photos AND PDFs (a multi-page PDF = one ticket per page).
+const isTicketUpload = (f) => isImage(f) || /application\/pdf/.test(f.type) || /\.pdf$/i.test(f.name);
 const isXlsx = (f) => /\.xlsx$/i.test(f.name) || f.type.includes("spreadsheetml");
 const isSheet = (f) => isXlsx(f) || /\.csv$/i.test(f.name) || f.type.includes("csv");
 
 /* ----------------------------------------------------------- app state */
-const state = { lastBatchId: null };
+// `batchIds` tracks every batch created this session so "Start over" can delete
+// them server-side.
+const state = { lastBatchId: null, batchIds: new Set() };
+
+function rememberBatch(id) {
+  if (id) { state.lastBatchId = id; state.batchIds.add(id); }
+}
 
 /* ===================================================================== *
  *  Top-level tabs — two independent pipelines
@@ -248,7 +256,15 @@ const uploadPicker = createPicker({
   submitBtn: $("#upload-submit"),
   clearBtn: $("#upload-clear"),
   multiple: true,
-  accept: isImage,
+  accept: isTicketUpload,
+});
+
+// "Clear list" should also clear the Step-1 result notice (the picker's own
+// clear only empties the staged files). The global [hidden] CSS fix makes the
+// button hide correctly when the list is empty.
+$("#upload-clear").addEventListener("click", () => {
+  uploadResult.hidden = true;
+  uploadResult.replaceChildren();
 });
 
 $("#upload-form").addEventListener("submit", async (e) => {
@@ -272,7 +288,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
     }
   } catch (err) {
     renderNotice(uploadResult, "error", "We couldn't upload your tickets",
-      [el("p", { class: "notice-text", text: "Please check the files are photos (JPEG or PNG) and try again." })],
+      [el("p", { class: "notice-text", text: "Please check the files are photos (JPEG/PNG) or PDFs and try again." })],
       errorDetail(err));
     toast("error", "Upload failed", "Please try again.");
     btn.disabled = false;
@@ -283,7 +299,7 @@ $("#upload-form").addEventListener("submit", async (e) => {
 
 function renderUploadResult(data) {
   const tickets = Array.isArray(data && data.tickets) ? data.tickets : [];
-  if (data && data.batch_id) state.lastBatchId = data.batch_id;
+  if (data && data.batch_id) rememberBatch(data.batch_id);
 
   const manual = tickets.filter((t) => t.status === "manual_queue");
   const failed = tickets.filter((t) => t.status === "error");
@@ -343,7 +359,7 @@ runBtn.addEventListener("click", async () => {
   try {
     const data = await api.runBatch(state.lastBatchId || undefined);
     runProgress.hidden = true;
-    if (data && data.batch_id) state.lastBatchId = data.batch_id;
+    if (data && data.batch_id) rememberBatch(data.batch_id);
     renderRunResult(data);
     setDownloadReady(data && data.batch_id);
     toast("success", "Data extracted", "Your review spreadsheet is ready in step 3.");
@@ -801,6 +817,36 @@ whatsNewModal.addEventListener("click", (e) => {
 // ESC closes it.
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !whatsNewModal.hidden) closeWhatsNew();
+});
+
+/* ===================================================================== *
+ *  Start over — wipe this session's work and return to step 1
+ * ===================================================================== */
+$("#start-over-btn").addEventListener("click", async () => {
+  const ok = window.confirm(
+    "Start over? This permanently deletes the tickets you uploaded and the " +
+    "spreadsheet generated in this session, and returns you to step 1. " +
+    "This cannot be undone."
+  );
+  if (!ok) return;
+
+  const ids = Array.from(state.batchIds);
+  // Delete server-side work (best-effort; UI resets regardless).
+  await Promise.all(ids.map((id) => api.deleteBatch(id).catch(() => {})));
+
+  // Reset the UI back to step 1.
+  uploadPicker.clear();
+  correctionsPicker.clear();
+  for (const node of [uploadResult, runResult, correctionsResult]) {
+    if (node) { node.hidden = true; node.replaceChildren(); }
+  }
+  runProgress.hidden = true;
+  state.lastBatchId = null;
+  state.batchIds.clear();
+  setStep2Ready(false);
+  setDownloadReady(null);
+  loadBatches();   // Past batches list no longer includes the deleted ones
+  toast("info", "Started over", "You're back at step 1.");
 });
 
 /* ===================================================================== *

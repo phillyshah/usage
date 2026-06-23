@@ -219,6 +219,11 @@ a { color: var(--teal-600); }
   color: var(--ink-300);
 }
 
+/* The HTML `hidden` attribute must always win. Author display rules (e.g.
+   `.btn { display: inline-flex }`) otherwise override it, which left "Clear
+   list" / the download button visible when they should be hidden. */
+[hidden] { display: none !important; }
+
 /* ----------------------------- Dropzone -------------------------------- */
 .dropzone {
   display: grid; place-items: center; gap: var(--s-2); text-align: center;

@@ -48,7 +48,7 @@ def _is_wasted(vline: dict) -> bool:
     if isinstance(val, bool):
         return val
     if isinstance(val, str):
-        return val.strip().lower() in ("w", "wasted", "true", "yes")
+        return val.strip().lower() in ("w", "wasted", "true", "yes", "i/o", "io")
     return False
 
 

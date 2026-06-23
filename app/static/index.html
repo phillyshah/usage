@@ -34,6 +34,9 @@
           <span id="health-dot" class="health-dot is-unknown" aria-hidden="true"></span>
           <span id="health-label" class="health-label">Checking connection…</span>
         </div>
+        <button type="button" id="start-over-btn" class="btn btn-ghost btn-sm">
+          Start over
+        </button>
         <button type="button" id="whats-new-btn" class="whats-new-btn" aria-haspopup="dialog">
           What's New
         </button>
@@ -113,7 +116,7 @@
         <span class="step-number" aria-hidden="true">1</span>
         <div>
           <h2 class="step-title" id="step1-title">Upload today's tickets</h2>
-          <p class="step-help">Add the photos of today's tickets. You can drag them in or click to browse — JPEG or PNG, as many as you like.</p>
+          <p class="step-help">Add today's tickets — photos or PDFs. You can drag them in or click to browse — JPEG, PNG or PDF, as many as you like. A multi-page PDF is treated as one ticket per page.</p>
         </div>
       </div>
 
@@ -127,10 +130,10 @@
               <line x1="12" y1="4" x2="12" y2="16" />
             </svg>
           </span>
-          <span class="dropzone-title">Drag photos here</span>
+          <span class="dropzone-title">Drag photos or PDFs here</span>
           <span class="dropzone-sub" id="upload-hint">or <span class="link-like">click to choose files</span></span>
           <input id="upload-input" class="visually-hidden" type="file"
-                 accept="image/jpeg,image/png" multiple />
+                 accept="image/jpeg,image/png,application/pdf,.pdf" multiple />
         </label>
 
         <ul class="file-list" id="upload-file-list" aria-live="polite"></ul>

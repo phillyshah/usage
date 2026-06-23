@@ -567,6 +567,12 @@ class Database:
         self.backend.delete_where("line_items", "ticket_id", ticket_id)
         self.backend.delete_where("field_extractions", "ticket_id", ticket_id)
 
+    def delete_tickets_for_batch(self, batch_id: str) -> int:
+        return self.backend.delete_where("tickets", "batch_id", batch_id)
+
+    def delete_batch(self, batch_id: str) -> int:
+        return self.backend.delete_where("batches", "id", batch_id)
+
     # ---- field extractions (per-field snapshot) ----
     def add_field_extraction(self, row: dict) -> None:
         row.setdefault("created_at", _now_iso())
