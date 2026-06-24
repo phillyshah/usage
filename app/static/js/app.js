@@ -441,6 +441,8 @@ $("#corrections-form").addEventListener("submit", async (e) => {
     toast("success", "Corrections received", "Thanks — the tool just got a little smarter.");
     correctionsPicker.clear();
     loadMetrics();
+    loadLearning();
+    loadUploads();
   } catch (err) {
     renderNotice(correctionsResult, "error", "We couldn't read your corrections",
       [el("p", { class: "notice-text", text: "Make sure you're uploading the saved spreadsheet (.xlsx) and try again." })],
@@ -687,7 +689,7 @@ const metricsChart = $("#metrics-chart");
 async function loadMetrics() {
   metricsChart.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
   try {
-    const data = await api.autoResolveMetrics(8);
+    const data = await api.autoResolveDaily(14);
     renderMetrics(Array.isArray(data) ? data : []);
   } catch (err) {
     metricsChart.replaceChildren(
@@ -708,7 +710,7 @@ function renderMetrics(points) {
     return;
   }
   const bars = el("div", { class: "metric-bars", attrs: { role: "img",
-    "aria-label": "Weekly share of labels read confidently" } });
+    "aria-label": "Daily share of labels read confidently" } });
   for (const p of points) {
     const pct = clampPct(p.pct_confident);
     const col = el("div", { class: "metric-col" });
@@ -718,7 +720,7 @@ function renderMetrics(points) {
     bar.style.height = `${pct}%`;
     wrap.append(bar);
     col.append(wrap);
-    col.append(el("div", { class: "metric-week", text: weekLabel(p.week) }));
+    col.append(el("div", { class: "metric-week", text: dayLabel(p.date) }));
     bars.append(col);
   }
   metricsChart.replaceChildren(bars);
@@ -730,11 +732,127 @@ function clampPct(v) {
   if (n <= 1) n *= 100; // accept either 0..1 or 0..100
   return Math.max(0, Math.min(100, n));
 }
-function weekLabel(w) {
-  if (w == null) return "";
-  const d = new Date(w);
-  if (!isNaN(d.getTime())) return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  return String(w);
+function dayLabel(isoDate) {
+  if (isoDate == null) return "";
+  const d = new Date(isoDate);
+  if (isNaN(d.getTime())) return String(isoDate);
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/* ===================================================================== *
+ *  HISTORY — What the tool has learned + retraining activity
+ * ===================================================================== */
+const learningTotals = $("#learning-totals");
+const learningDaily = $("#learning-daily");
+const uploadsList = $("#uploads-list");
+
+/** Friendly summary of the facts learned on a given day, e.g. "learned 3 prices, 1 rep". */
+function factsSummary(facts) {
+  if (!facts) return "";
+  const parts = [];
+  if (num(facts, "prices")) parts.push(pluralize(num(facts, "prices"), "price"));
+  if (num(facts, "part_descriptions")) parts.push(pluralize(num(facts, "part_descriptions"), "part description"));
+  if (num(facts, "reps")) parts.push(pluralize(num(facts, "reps"), "rep"));
+  if (num(facts, "gtin_links")) parts.push(pluralize(num(facts, "gtin_links"), "barcode link"));
+  return parts.length ? `learned ${parts.join(", ")}` : "";
+}
+
+async function loadLearning() {
+  learningTotals.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
+  learningDaily.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
+  let data;
+  try {
+    data = await api.learningMetrics(14);
+  } catch (err) {
+    learningTotals.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "Couldn't load this yet" }),
+        el("span", { text: "It will show up once there's some history." }),
+      ]));
+    learningDaily.replaceChildren();
+    return;
+  }
+
+  const cum = (data && data.cumulative) || {};
+  const total = num(cum, "prices") + num(cum, "part_descriptions") + num(cum, "reps") + num(cum, "gtin_links");
+  if (total === 0) {
+    learningTotals.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "The tool hasn't learned anything yet" }),
+        el("span", { text: "Send back a corrected spreadsheet to start." }),
+      ]));
+  } else {
+    learningTotals.replaceChildren(
+      el("div", { class: "stat-grid stat-grid-4" }, [
+        stat(num(cum, "prices"), "prices"),
+        stat(num(cum, "part_descriptions"), "part descriptions"),
+        stat(num(cum, "reps"), "reps"),
+        stat(num(cum, "gtin_links"), "barcode→part links"),
+      ]));
+  }
+
+  // 3b — per-day learning impact (skip all-zero days).
+  const days = Array.isArray(data && data.daily) ? data.daily : [];
+  const rows = [];
+  for (const d of days) {
+    const corrections = num(d, "corrections_made");
+    const blanks = num(d, "blanks_filled");
+    const fixed = num(d, "low_conf_fixed");
+    const facts = factsSummary(d.facts_learned);
+    if (corrections === 0 && blanks === 0 && fixed === 0 && !facts) continue;
+    const sub = `${pluralize(corrections, "correction")} · ${blanks} blanks filled · ${fixed} guesses fixed`;
+    const meta = el("div", { class: "batch-meta" }, [
+      el("div", { class: "batch-date", text: friendlyDate(d.date) || "Day" }),
+      el("div", { class: "batch-sub", text: sub }),
+    ]);
+    if (facts) meta.append(el("div", { class: "batch-sub", text: facts }));
+    rows.push(el("div", { class: "batch-row" }, [meta]));
+  }
+  if (rows.length === 0) {
+    learningDaily.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "No learning activity yet" }),
+        el("span", { text: "Once you send corrections, the daily impact shows here." }),
+      ]));
+  } else {
+    learningDaily.replaceChildren(...rows);
+  }
+}
+
+async function loadUploads() {
+  uploadsList.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
+  let data;
+  try {
+    data = await api.correctionsUploads();
+  } catch (err) {
+    uploadsList.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "Couldn't load upload history" }),
+        el("span", { text: "It will show up once there's some history." }),
+      ]));
+    return;
+  }
+  const uploads = Array.isArray(data) ? data : [];
+  if (uploads.length === 0) {
+    uploadsList.replaceChildren(
+      el("div", { class: "empty-state" }, [
+        el("strong", { text: "No corrections sent yet" }),
+        el("span", { text: "Upload a corrected spreadsheet in step 4 to begin." }),
+      ]));
+    return;
+  }
+  uploadsList.replaceChildren(...uploads.map((u) => {
+    const sheets = num(u, "sheets_processed");
+    const matched = num(u, "tickets_matched");
+    const sub = `${pluralize(sheets, "file")} · ${pluralize(matched, "ticket")} matched` +
+      (u.status ? " · " + humanStatus(u.status) : "");
+    return el("div", { class: "batch-row" }, [
+      el("div", { class: "batch-meta" }, [
+        el("div", { class: "batch-date", text: friendlyDate(u.uploaded_at) || "Upload" }),
+        el("div", { class: "batch-sub", text: sub }),
+      ]),
+    ]);
+  }));
 }
 
 /* ===================================================================== *
@@ -855,5 +973,7 @@ $("#start-over-btn").addEventListener("click", async () => {
 checkHealth();
 loadBatches();
 loadMetrics();
+loadLearning();
+loadUploads();
 loadReferenceStatus();
 loadChangelog(); // prefetch version + populate footer quietly

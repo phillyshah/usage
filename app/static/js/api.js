@@ -159,6 +159,39 @@ export const api = {
     });
   },
 
+  /**
+   * GET /metrics/auto-resolve-daily?days=N (ascending date)
+   * -> [{date, pct_confident, fields, confident}]
+   */
+  autoResolveDaily(days = 14) {
+    return request(`/metrics/auto-resolve-daily?days=${encodeURIComponent(days)}`, {
+      method: "GET",
+    });
+  },
+
+  /**
+   * GET /metrics/learning?days=N
+   * -> {cumulative:{prices, part_descriptions, reps, gtin_links},
+   *     daily:[{date, corrections_made, blanks_filled, low_conf_fixed,
+   *             facts_learned:{prices, part_descriptions, reps, gtin_links}}]}
+   *     (daily newest-first)
+   */
+  learningMetrics(days = 14) {
+    return request(`/metrics/learning?days=${encodeURIComponent(days)}`, {
+      method: "GET",
+    });
+  },
+
+  /**
+   * GET /corrections/uploads?limit=N
+   * -> [{uploaded_at, sheets_processed, tickets_matched, tickets_unknown, status}]
+   */
+  correctionsUploads(limit = 50) {
+    return request(`/corrections/uploads?limit=${encodeURIComponent(limit)}`, {
+      method: "GET",
+    });
+  },
+
   /** GET /version -> {version, changelog:[{version, date, notes:[]}]} */
   getVersion() {
     return request("/version", { method: "GET" });

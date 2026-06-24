@@ -410,6 +410,37 @@ def metrics_auto_resolve(weeks: int = 8):
     return auto_resolve_by_week(weeks)
 
 
+@app.get("/metrics/auto-resolve-daily")
+def metrics_auto_resolve_daily(days: int = 14):
+    """Daily confidence trend with real dates (History tab chart)."""
+    from app.metrics import auto_resolve_by_day
+
+    return auto_resolve_by_day(days)
+
+
+@app.get("/metrics/learning")
+def metrics_learning(days: int = 14):
+    """Learning impact: cumulative totals + per-day corrections/facts learned."""
+    from app.metrics import learning_timeline
+
+    return learning_timeline(days)
+
+
+@app.get("/corrections/uploads")
+def corrections_uploads(limit: int = 50):
+    """List the retraining (corrected-sheet) uploads, newest first."""
+    out = []
+    for r in db.list_corrected_uploads(limit):
+        out.append({
+            "uploaded_at": r.get("uploaded_at"),
+            "sheets_processed": r.get("sheets_processed") or 0,
+            "tickets_matched": r.get("tickets_matched") or 0,
+            "tickets_unknown": r.get("tickets_unknown") or 0,
+            "status": r.get("status"),
+        })
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Static UI (mounted last so API routes win). html=True serves index.html at /.
 # ---------------------------------------------------------------------------

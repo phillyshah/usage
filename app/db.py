@@ -601,6 +601,27 @@ class Database:
         row.setdefault("uploaded_at", _now_iso())
         return self.backend.insert("corrected_uploads", row)
 
+    def list_corrected_uploads(self, limit: int = 50) -> list[dict]:
+        """Retraining uploads, newest first (for the History tab)."""
+        rows = self.backend.select("corrected_uploads")
+        rows.sort(key=lambda r: r.get("uploaded_at") or "", reverse=True)
+        return rows[:limit]
+
+    def list_learning_counts(self) -> dict[str, int]:
+        """Cumulative row count of each learning store (uncapped count=exact).
+
+        Pass each table's real stamp column so the Supabase order query in
+        table_stats targets a column that exists.
+        """
+        specs = {
+            "learning_price": "last_seen",
+            "learning_part_desc": "updated_at",
+            "learning_rep_map": "updated_at",
+            "learning_gtin_xref": "updated_at",
+        }
+        return {t: self.backend.table_stats(t, stamp_col=col).get("rows", 0)
+                for t, col in specs.items()}
+
     # ---- metrics ----
     def corrections_audit(self) -> list[dict]:
         return self.backend.select("corrections_audit")

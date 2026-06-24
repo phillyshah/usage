@@ -100,6 +100,10 @@
               aria-selected="true" aria-controls="panel-tickets" tabindex="0">
         Process Tickets
       </button>
+      <button type="button" class="tab" id="tab-history" role="tab"
+              aria-selected="false" aria-controls="panel-history" tabindex="-1">
+        History
+      </button>
       <button type="button" class="tab" id="tab-reference" role="tab"
               aria-selected="false" aria-controls="panel-reference" tabindex="-1">
         Reference Data
@@ -271,28 +275,47 @@
       <div id="corrections-result" class="result-area" hidden></div>
     </section>
 
-    <!-- ===================== SECONDARY ===================== -->
-    <div class="secondary-grid">
+    </div><!-- /#panel-tickets -->
 
-      <!-- Past batches -->
+    <!-- ===================== PANEL: History ===================== -->
+    <div id="panel-history" class="tab-panel main-grid" role="tabpanel"
+         aria-labelledby="tab-history" tabindex="0" hidden>
+
+      <!-- 1. Getting better over time (daily) -->
+      <section class="card" aria-labelledby="metrics-title">
+        <h2 class="step-title" id="metrics-title">Getting better over time</h2>
+        <p class="step-help">The share of labels the tool reads confidently each day. The more corrections you send, the higher this climbs.</p>
+        <div id="metrics-chart" class="metrics" aria-live="polite"></div>
+      </section>
+
+      <!-- 2. What the tool has learned -->
+      <section class="card" aria-labelledby="learning-totals-title">
+        <h2 class="step-title" id="learning-totals-title">What the tool has learned</h2>
+        <p class="step-help">Everything the tool has picked up from your corrections so far.</p>
+        <div id="learning-totals" aria-live="polite"></div>
+      </section>
+
+      <!-- 3. Retraining activity -->
+      <section class="card" aria-labelledby="retraining-title">
+        <h2 class="step-title" id="retraining-title">Retraining activity</h2>
+        <p class="step-help">When you sent corrections back, and what the tool learned from them.</p>
+        <h3 class="secondary-title">Correction uploads</h3>
+        <div id="uploads-list" class="batches" aria-live="polite"></div>
+        <h3 class="secondary-title" style="margin-top: var(--s-6);">Daily learning impact</h3>
+        <div id="learning-daily" class="batches" aria-live="polite"></div>
+      </section>
+
+      <!-- 4. Work done (Past batches, moved) -->
       <section class="card secondary-card" aria-labelledby="batches-title">
         <div class="secondary-head">
-          <h2 class="secondary-title" id="batches-title">Past batches</h2>
+          <h2 class="secondary-title" id="batches-title">Work done</h2>
           <button type="button" id="batches-refresh" class="btn btn-ghost btn-sm">Refresh</button>
         </div>
         <p class="step-help">Spreadsheets you've created before. Click to download one again.</p>
         <div id="batches-list" class="batches" aria-live="polite"></div>
       </section>
 
-      <!-- Metrics -->
-      <section class="card secondary-card secondary-wide" aria-labelledby="metrics-title">
-        <h2 class="secondary-title" id="metrics-title">Getting better over time</h2>
-        <p class="step-help">The share of labels the tool reads confidently each week. The more corrections you send, the higher this climbs.</p>
-        <div id="metrics-chart" class="metrics" aria-live="polite"></div>
-      </section>
-
-    </div>
-    </div><!-- /#panel-tickets -->
+    </div><!-- /#panel-history -->
 
     <!-- ===================== PANEL 2: Reference Data ===================== -->
     <div id="panel-reference" class="tab-panel main-grid" role="tabpanel"
