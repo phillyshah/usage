@@ -103,6 +103,26 @@ def _money(x):
     return -val if neg else val
 
 
+def _qty(x) -> int:
+    """Parse a handwritten quantity to a positive integer, defaulting to 1.
+
+    Accepts ints/floats and strings like "4", "x4", "Qty 4". Anything missing or
+    unparseable (or < 1) becomes 1 — a line is at least one unit.
+    """
+    if isinstance(x, bool):
+        return 1
+    if isinstance(x, (int, float)):
+        n = int(x)
+        return n if n >= 1 else 1
+    if x is None:
+        return 1
+    m = re.search(r"\d+", str(x))
+    if not m:
+        return 1
+    n = int(m.group())
+    return n if n >= 1 else 1
+
+
 def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> dict:
     """Build + persist line items and the ticket header from the merged sources.
 
@@ -190,9 +210,10 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         part = resolve_part(ref_in, label.get("gtin"), lot_in)
         wasted = _is_wasted(vline)
 
-        # One row per physical unit (per label/lot): Quantity is always 1
-        # (FIELD_GUIDE §6). A REF used N times yields N rows, one per lot.
-        qty = 1
+        # Quantity is 1 per labeled physical unit, but when a count is written on
+        # the ticket (e.g. "4 pins" for an unlabeled item) we honor it.
+        qty_read = _v(vline.get("qty"))
+        qty = _qty(qty_read)
         unit_price = _money(_v(vline.get("unit_price")))
 
         # Hospital price memory: suggestion only, never override.
@@ -267,7 +288,9 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             "description": desc_conf,
             "size": "low",
             "lot": "high" if label.get("lot") else ("medium" if lot_in else "low"),
-            "qty": "high",  # always 1 by rule
+            # 1-by-default is high; a vision-read count is scored like other reads.
+            "qty": (conf.score_field({"vision": qty_read, "vision_conf": _c(vline.get("qty"))})
+                    if qty_read not in (None, "") else "high"),
             "mfg_date": "high" if label.get("mfg") else "low",
             "expiry_date": expiry_conf,
             "unit_price": price_conf,

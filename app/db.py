@@ -384,11 +384,16 @@ class Database:
 
     def part_info_for_ref(self, ref: str) -> dict | None:
         """Ref Number -> {description, part_type, category}. Exact match, then
-        case-insensitive (trailing +/- are significant and preserved)."""
+        case-insensitive (trailing +/- are significant and preserved). Falls back
+        to the built-in partner overlay (e.g. uniko), which survives the monthly
+        full-replace of reference_part_info."""
         if not ref:
             return None
+        from app import partner_parts
+
         return (self.backend.find_one("reference_part_info", "part_number", ref)
-                or self.backend.find_one_ci("reference_part_info", "part_number", ref))
+                or self.backend.find_one_ci("reference_part_info", "part_number", ref)
+                or partner_parts.lookup(ref))
 
     def surgeon_for_key(self, key: str) -> dict | None:
         """<SurgeonLastName><DistCode> (normalized) -> surgeon_info record.

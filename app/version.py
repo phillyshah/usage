@@ -5,9 +5,22 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.6.1"
+VERSION = "2.7.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.7.0",
+        "date": "2026-06-24",
+        "notes": [
+            "Quantities greater than 1 are now captured: when a hospital writes a "
+            "count for an item (e.g. '4 pins'), the row records that quantity and "
+            "the line total scales accordingly, instead of always showing 1",
+            "Added UNIKO as a recognized partner: the two UNIKO PointCloud Knee "
+            "Instrument kits (UKI0201-L / UKI0201-R) now auto-fill their "
+            "description, part type and category — and they keep working even after "
+            "a monthly parts-file update",
+        ],
+    },
     {
         "version": "2.6.1",
         "date": "2026-06-24",
