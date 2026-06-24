@@ -54,6 +54,9 @@ For each device label, read the PRINTED catalogue/reference number and lot:
     "Price" box. See the price rules below.
   - "wasted": true if a handwritten "W", "wasted", or "I/O" appears near the
     component (the item is still used — just mark it); otherwise false.
+  - "qty": the handwritten quantity for this item IF a count is written (e.g. "4",
+    "x4", "Qty 4" — common for unlabeled items like "4 pins"). Return an integer.
+    Return null when no count is written (the line is a single unit).
 Read these from the printed label text even when a barcode is present. Do NOT
 provide a description — that is looked up separately from the reference tables.
 
