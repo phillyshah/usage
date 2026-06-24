@@ -627,6 +627,22 @@ class Database:
         return {t: self.backend.table_stats(t, stamp_col=col).get("rows", 0)
                 for t, col in specs.items()}
 
+    def learning_prices(self) -> list[dict]:
+        rows = self.backend.select("learning_price")
+        return sorted(rows, key=lambda r: r.get("last_seen") or "", reverse=True)
+
+    def learning_part_descs(self) -> list[dict]:
+        rows = self.backend.select("learning_part_desc")
+        return sorted(rows, key=lambda r: r.get("updated_at") or "", reverse=True)
+
+    def learning_reps(self) -> list[dict]:
+        rows = self.backend.select("learning_rep_map")
+        return sorted(rows, key=lambda r: r.get("updated_at") or "", reverse=True)
+
+    def learning_gtin_xrefs(self) -> list[dict]:
+        rows = self.backend.select("learning_gtin_xref")
+        return sorted(rows, key=lambda r: r.get("updated_at") or "", reverse=True)
+
     # ---- metrics ----
     def corrections_audit(self) -> list[dict]:
         return self.backend.select("corrections_audit")

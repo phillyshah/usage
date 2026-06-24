@@ -5,9 +5,18 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.7.0"
+VERSION = "2.7.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.7.1",
+        "date": "2026-06-24",
+        "notes": [
+            "The 'What the tool has learned' blocks in the History tab are now "
+            "clickable — tap any category (prices, part descriptions, reps, "
+            "barcode→part links) to see the full list of what was learned and when",
+        ],
+    },
     {
         "version": "2.7.0",
         "date": "2026-06-24",

@@ -750,6 +750,109 @@ function dayLabel(isoDate) {
 }
 
 /* ===================================================================== *
+ *  LEARNING DETAIL MODAL
+ * ===================================================================== */
+const learnModal = $("#learn-modal");
+const learnModalTitle = $("#learn-modal-title");
+const learnModalBody = $("#learn-modal-body");
+const learnModalClose = $("#learn-modal-close");
+
+function closeLearnModal() { learnModal.hidden = true; }
+learnModalClose.addEventListener("click", closeLearnModal);
+learnModal.addEventListener("click", (e) => { if (e.target === learnModal) closeLearnModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !learnModal.hidden) closeLearnModal();
+});
+
+/** Config for each learning category: endpoint path, title, column definitions. */
+const LEARN_KINDS = {
+  prices: {
+    title: "Learned prices",
+    endpoint: "prices",
+    cols: [
+      { label: "Part #",   key: "part_no",    cls: "learn-key" },
+      { label: "Hospital", key: "hospital",    cls: "" },
+      { label: "Price",    key: "unit_price",  cls: "learn-price",
+        fmt: (v) => v == null ? "—" : `$${Number(v).toFixed(2)}` },
+      { label: "Last seen", key: "last_seen",  cls: "learn-date", fmt: mdy },
+    ],
+  },
+  part_descriptions: {
+    title: "Learned part descriptions",
+    endpoint: "part-descriptions",
+    cols: [
+      { label: "Part #",      key: "part_no",     cls: "learn-key" },
+      { label: "Description", key: "description", cls: "learn-desc" },
+      { label: "Size",        key: "size",        cls: "" },
+      { label: "Date learned", key: "updated_at", cls: "learn-date", fmt: mdy },
+    ],
+  },
+  reps: {
+    title: "Learned reps",
+    endpoint: "reps",
+    cols: [
+      { label: "Rep code",    key: "rep_code", cls: "learn-key" },
+      { label: "Rep name",    key: "rep_name", cls: "" },
+      { label: "Date learned", key: "updated_at", cls: "learn-date", fmt: mdy },
+    ],
+  },
+  gtin_links: {
+    title: "Learned barcode→part links",
+    endpoint: "gtin-links",
+    cols: [
+      { label: "GTIN",     key: "gtin",          cls: "learn-key" },
+      { label: "Part #",   key: "part_no",       cls: "" },
+      { label: "Seen",     key: "confirmations", cls: "learn-conf",
+        fmt: (v) => v == null ? "—" : `${v}×` },
+      { label: "Date linked", key: "updated_at", cls: "learn-date", fmt: mdy },
+    ],
+  },
+};
+
+async function openLearningDetail(kind) {
+  const cfg = LEARN_KINDS[kind];
+  if (!cfg) return;
+  learnModalTitle.textContent = cfg.title;
+  learnModalBody.replaceChildren(el("p", { class: "muted-note", text: "Loading…", attrs: { style: "padding: 24px 20px;" } }));
+  learnModal.hidden = false;
+  learnModalClose.focus();
+
+  let rows;
+  try {
+    rows = await api.learningDetail(cfg.endpoint);
+  } catch {
+    learnModalBody.replaceChildren(
+      el("p", { class: "muted-note learn-empty", text: "Couldn't load details right now." }));
+    return;
+  }
+
+  if (!Array.isArray(rows) || rows.length === 0) {
+    learnModalBody.replaceChildren(
+      el("p", { class: "muted-note learn-empty", text: "Nothing learned yet in this category." }));
+    return;
+  }
+
+  const thead = el("thead");
+  const hrow = el("tr");
+  for (const col of cfg.cols) hrow.append(el("th", { text: col.label }));
+  thead.append(hrow);
+
+  const tbody = el("tbody");
+  for (const row of rows) {
+    const tr = el("tr");
+    for (const col of cfg.cols) {
+      const raw = row[col.key];
+      const text = col.fmt ? col.fmt(raw) : (raw == null || raw === "" ? "—" : String(raw));
+      tr.append(el("td", { class: col.cls || "", text }));
+    }
+    tbody.append(tr);
+  }
+
+  const table = el("table", { class: "learn-table", attrs: { role: "grid" } }, [thead, tbody]);
+  learnModalBody.replaceChildren(table);
+}
+
+/* ===================================================================== *
  *  HISTORY — What the tool has learned + retraining activity
  * ===================================================================== */
 const learningTotals = $("#learning-totals");
@@ -765,6 +868,21 @@ function factsSummary(facts) {
   if (num(facts, "reps")) parts.push(pluralize(num(facts, "reps"), "rep"));
   if (num(facts, "gtin_links")) parts.push(pluralize(num(facts, "gtin_links"), "barcode link"));
   return parts.length ? `learned ${parts.join(", ")}` : "";
+}
+
+/** Clickable stat button that opens the learning detail modal for `kind`. */
+function statBtn(n, label, kind) {
+  const btn = el("button", {
+    class: "stat-btn",
+    attrs: { type: "button", "aria-label": `${label}: ${n}. Tap to see all.` },
+  });
+  btn.append(
+    el("div", { class: "stat-num", text: String(n) }),
+    el("div", { class: "stat-label", text: label }),
+    el("span", { class: "stat-hint", text: "See all →" }),
+  );
+  btn.addEventListener("click", () => openLearningDetail(kind));
+  return btn;
 }
 
 async function loadLearning() {
@@ -794,10 +912,10 @@ async function loadLearning() {
   } else {
     learningTotals.replaceChildren(
       el("div", { class: "stat-grid stat-grid-4" }, [
-        stat(num(cum, "prices"), "prices"),
-        stat(num(cum, "part_descriptions"), "part descriptions"),
-        stat(num(cum, "reps"), "reps"),
-        stat(num(cum, "gtin_links"), "barcode→part links"),
+        statBtn(num(cum, "prices"), "prices", "prices"),
+        statBtn(num(cum, "part_descriptions"), "part descriptions", "part_descriptions"),
+        statBtn(num(cum, "reps"), "reps", "reps"),
+        statBtn(num(cum, "gtin_links"), "barcode→part links", "gtin_links"),
       ]));
   }
 
