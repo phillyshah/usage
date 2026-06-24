@@ -71,6 +71,18 @@ _executor = ThreadPoolExecutor(max_workers=4)
 app = FastAPI(title="Usage — Label Extraction", version=VERSION, lifespan=lifespan)
 
 
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    """Tell the browser to revalidate the UI shell + assets on every load.
+    Combined with Starlette's ETags this means a redeploy is picked up
+    immediately (no stale cached index.html/app.js hiding new features)."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith(("/js/", "/css/")):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 # ---------------------------------------------------------------------------
 # Health + version
 # ---------------------------------------------------------------------------

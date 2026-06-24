@@ -30,6 +30,20 @@ function fmtBytes(n) {
 
 function pluralize(n, one, many) { return `${n} ${n === 1 ? one : (many || one + "s")}`; }
 
+/** Format a date (ISO date or timestamp) as US MM/DD/YYYY. Date-only strings are
+ *  parsed literally to avoid a timezone off-by-one. Empty/invalid -> "" / as-is. */
+function mdy(value) {
+  if (value == null || value === "") return "";
+  const s = String(value);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);     // YYYY-MM-DD[...] -> MM/DD/YYYY
+  if (m) return `${m[2]}/${m[3]}/${m[1]}`;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}/${dd}/${d.getFullYear()}`;
+}
+
 /* SVG icon snippets reused in notices/toasts. */
 const ICONS = {
   check: `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="8 12 11 15 16 9"/></svg>`,
@@ -489,9 +503,9 @@ function stat(n, label) {
 function fmtWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) +
-    " at " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  if (isNaN(d.getTime())) return mdy(iso);
+  return mdy(iso) + " at " +
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 /**
@@ -670,10 +684,7 @@ function renderBatches(batches) {
 }
 
 function friendlyDate(raw) {
-  if (!raw) return "";
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return String(raw);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return mdy(raw);
 }
 function humanStatus(s) {
   return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -733,10 +744,9 @@ function clampPct(v) {
   return Math.max(0, Math.min(100, n));
 }
 function dayLabel(isoDate) {
-  if (isoDate == null) return "";
-  const d = new Date(isoDate);
-  if (isNaN(d.getTime())) return String(isoDate);
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  // Compact MM/DD (month/day order) for the chart axis — full year would crowd it.
+  const full = mdy(isoDate);
+  return full ? full.slice(0, 5) : "";
 }
 
 /* ===================================================================== *
@@ -890,7 +900,7 @@ function renderChangelog(changelog) {
     section.append(
       el("div", { class: "cl-header" }, [
         el("span", { class: "cl-version", text: `v${entry.version}` }),
-        el("span", { class: "cl-date", text: entry.date }),
+        el("span", { class: "cl-date", text: mdy(entry.date) || entry.date }),
       ]),
       el("ul", { class: "cl-notes" },
         (entry.notes || []).map((n) => el("li", { text: n }))

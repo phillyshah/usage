@@ -148,6 +148,19 @@ def _date_mdy(v):
     return d.strftime("%m/%d/%Y") if d else None
 
 
+# Date-valued fields are written as MM/DD/YYYY (US), never raw ISO YYYY-MM-DD.
+_DATE_FIELDS = {"expiry_date", "mfg_date", "surgery_date"}
+
+
+def _fmt_field(field: str, value):
+    """Format a cell value: date fields -> MM/DD/YYYY, everything else as-is."""
+    if value is None or value == "":
+        return value
+    if field in _DATE_FIELDS:
+        return _date_mdy(value) or value
+    return value
+
+
 def _month_num(v):
     d = _parse_date(v)
     return d.month if d else None
@@ -285,7 +298,7 @@ def _write_usage_sheet(ws, tickets) -> None:
                 elif kind.startswith("line:"):
                     f = kind.split(":", 1)[1]
                     conf = cmap.get((line_id, f), "low")
-                    val = None if conf == "low" else line.get(f)
+                    val = None if conf == "low" else _fmt_field(f, line.get(f))
                 elif kind.startswith("part:"):
                     attr = kind.split(":", 1)[1]
                     # Same provenance as the line's Description confidence.
@@ -332,7 +345,7 @@ def _write_tickets_sheet(ws, tickets) -> None:
                 row_vals.append(_flags_text(ticket))
             else:
                 conf = cmap.get((None, field), "low")
-                row_vals.append("" if conf == "low" else ticket.get(field))
+                row_vals.append("" if conf == "low" else _fmt_field(field, ticket.get(field)))
         ws.append(row_vals)
         r = ws.max_row
         for idx, (header, field) in enumerate(TICKET_COLUMNS, start=1):
@@ -363,7 +376,7 @@ def _write_line_items_sheet(ws, tickets) -> None:
                     row_vals.append(_flags_text(line))
                 else:
                     conf = cmap.get((line_id, field), "low")
-                    row_vals.append("" if conf == "low" else line.get(field))
+                    row_vals.append("" if conf == "low" else _fmt_field(field, line.get(field)))
             ws.append(row_vals)
             r = ws.max_row
             for idx, (header, field) in enumerate(LINE_ITEM_COLUMNS, start=1):
@@ -396,8 +409,8 @@ def _write_raw_extraction_sheet(ws, tickets) -> None:
                 raw.get("payload"),
                 raw.get("gtin"),
                 raw.get("lot"),
-                raw.get("mfg"),
-                raw.get("expiry"),
+                _date_mdy(raw.get("mfg")) or raw.get("mfg"),
+                _date_mdy(raw.get("expiry")) or raw.get("expiry"),
                 raw.get("ref"),
                 raw.get("vis_ref"),
                 raw.get("vis_lot"),
