@@ -5,9 +5,24 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.5.1"
+VERSION = "2.6.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.6.0",
+        "date": "2026-06-24",
+        "notes": [
+            "New 'History' tab: see the work done (past batches), what you uploaded "
+            "for retraining, and — most importantly — the impact of that learning",
+            "'What the tool has learned' shows the running totals the tool has "
+            "picked up from your corrections: prices, part descriptions, rep codes, "
+            "and barcode→part links",
+            "Retraining activity shows, per day, how many fields you corrected "
+            "(blanks filled, guesses fixed) and what the tool learned from them",
+            "'Getting better over time' is now a daily view with real dates instead "
+            "of week numbers, and lives in the History tab",
+        ],
+    },
     {
         "version": "2.5.1",
         "date": "2026-06-23",
