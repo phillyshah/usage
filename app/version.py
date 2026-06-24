@@ -5,9 +5,20 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.6.1",
+        "date": "2026-06-24",
+        "notes": [
+            "Dates now read as Month/Day/Year (MM/DD/YYYY) everywhere — the "
+            "spreadsheet's Expiry / Mfg / Surgery dates and the dates shown in the "
+            "app — instead of the Year-Month-Day format",
+            "The app now always loads the latest version after a deploy (no more "
+            "needing a hard refresh to see new features like the History tab)",
+        ],
+    },
     {
         "version": "2.6.0",
         "date": "2026-06-24",
