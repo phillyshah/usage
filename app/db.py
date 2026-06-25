@@ -643,6 +643,14 @@ class Database:
         rows = self.backend.select("learning_gtin_xref")
         return sorted(rows, key=lambda r: r.get("updated_at") or "", reverse=True)
 
+    # ---- app_settings (key/value) ----
+    def get_app_setting(self, key: str) -> str | None:
+        r = self.backend.find_one("app_settings", "key", key)
+        return r.get("value") if r else None
+
+    def set_app_setting(self, key: str, value: str) -> None:
+        self.backend.upsert("app_settings", ["key"], {"key": key, "value": str(value)})
+
     # ---- metrics ----
     def corrections_audit(self) -> list[dict]:
         return self.backend.select("corrections_audit")

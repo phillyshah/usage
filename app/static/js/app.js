@@ -859,6 +859,47 @@ const learningTotals = $("#learning-totals");
 const learningDaily = $("#learning-daily");
 const uploadsList = $("#uploads-list");
 
+const learningHealth = $("#learning-health");
+
+/**
+ * Passive integrity banner at the top of "What the tool has learned": green when
+ * the learning stores are intact and growing, amber when idle, red if a store
+ * shrank below the most it has ever held (a data-loss signal). Hidden when there
+ * is nothing learned yet (the totals card shows its own empty state).
+ */
+async function loadLearningHealth() {
+  let h;
+  try {
+    h = await api.learningHealth();
+  } catch {
+    learningHealth.hidden = true;       // never let the safeguard itself nag
+    learningHealth.replaceChildren();
+    return;
+  }
+  const status = h && h.status;
+  if (!status || status === "empty") {
+    learningHealth.hidden = true;
+    learningHealth.replaceChildren();
+    return;
+  }
+  const total = num(h, "total");
+  const when = h && h.last_learned ? mdy(h.last_learned) : "";
+  if (status === "at_risk") {
+    renderNotice(learningHealth, "error", "Heads up — some learned facts may have been lost",
+      [el("p", { class: "notice-text", text:
+        "The learning store looks smaller than it was before. Nothing you did causes this on its own — please tell your team lead so it can be checked." })]);
+  } else if (status === "stale") {
+    renderNotice(learningHealth, "warn", `Learning intact — ${total.toLocaleString()} facts retained`,
+      [el("p", { class: "notice-text", text:
+        "Everything learned so far is safe, but the tool hasn't picked up anything new in a while. Send back corrections to keep it growing." })]);
+  } else { // ok
+    renderNotice(learningHealth, "success", `All learning intact — ${total.toLocaleString()} facts retained and growing`,
+      [el("p", { class: "notice-text", text:
+        when ? `Nothing has been lost. Most recently learned ${when}.`
+             : "Nothing has been lost." })]);
+  }
+}
+
 /** Friendly summary of the facts learned on a given day, e.g. "learned 3 prices, 1 rep". */
 function factsSummary(facts) {
   if (!facts) return "";
@@ -886,6 +927,7 @@ function statBtn(n, label, kind) {
 }
 
 async function loadLearning() {
+  loadLearningHealth();   // integrity banner refreshes alongside the totals
   learningTotals.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
   learningDaily.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
   let data;
