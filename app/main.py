@@ -438,6 +438,46 @@ def metrics_learning(days: int = 14):
     return learning_timeline(days)
 
 
+@app.get("/metrics/learning/prices")
+def learning_prices_detail():
+    """Full contents of the learned-prices store, newest first."""
+    return [
+        {"part_no": r.get("part_no"), "hospital": r.get("hospital"),
+         "unit_price": r.get("unit_price"), "last_seen": r.get("last_seen")}
+        for r in db.learning_prices()
+    ]
+
+
+@app.get("/metrics/learning/part-descriptions")
+def learning_part_descriptions_detail():
+    """Full contents of the learned-part-descriptions store, newest first."""
+    return [
+        {"part_no": r.get("part_no"), "description": r.get("description"),
+         "size": r.get("size"), "updated_at": r.get("updated_at")}
+        for r in db.learning_part_descs()
+    ]
+
+
+@app.get("/metrics/learning/reps")
+def learning_reps_detail():
+    """Full contents of the learned-rep-map store, newest first."""
+    return [
+        {"rep_code": r.get("rep_code"), "rep_name": r.get("rep_name"),
+         "updated_at": r.get("updated_at")}
+        for r in db.learning_reps()
+    ]
+
+
+@app.get("/metrics/learning/gtin-links")
+def learning_gtin_links_detail():
+    """Full contents of the learned GTIN→part crosswalk, newest first."""
+    return [
+        {"gtin": r.get("gtin"), "part_no": r.get("part_no"),
+         "confirmations": r.get("confirmations"), "updated_at": r.get("updated_at")}
+        for r in db.learning_gtin_xrefs()
+    ]
+
+
 @app.get("/corrections/uploads")
 def corrections_uploads(limit: int = 50):
     """List the retraining (corrected-sheet) uploads, newest first."""

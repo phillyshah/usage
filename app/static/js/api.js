@@ -192,6 +192,14 @@ export const api = {
     });
   },
 
+  /**
+   * GET /metrics/learning/{kind} — full rows for one learning store.
+   * kind: "prices" | "part-descriptions" | "reps" | "gtin-links"
+   */
+  learningDetail(kind) {
+    return request(`/metrics/learning/${encodeURIComponent(kind)}`, { method: "GET" });
+  },
+
   /** GET /version -> {version, changelog:[{version, date, notes:[]}]} */
   getVersion() {
     return request("/version", { method: "GET" });
