@@ -200,6 +200,14 @@ export const api = {
     return request(`/metrics/learning/${encodeURIComponent(kind)}`, { method: "GET" });
   },
 
+  /**
+   * GET /metrics/learning/health
+   * -> {status:"ok"|"stale"|"at_risk"|"empty", total, last_learned, tables:[...]}
+   */
+  learningHealth() {
+    return request("/metrics/learning/health", { method: "GET" });
+  },
+
   /** GET /version -> {version, changelog:[{version, date, notes:[]}]} */
   getVersion() {
     return request("/version", { method: "GET" });

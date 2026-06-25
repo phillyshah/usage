@@ -50,17 +50,36 @@ def purge_job() -> None:
         log.exception("purge failed: %s", e)
 
 
+def learning_health_job() -> None:
+    """Raise the learning-store high-water marks to the current counts.
+
+    The integrity baseline only ever rises here; it lets the History-tab banner
+    flag a later shrink (data loss) without false alarms from normal growth.
+    """
+    from app.metrics import bump_learning_watermarks
+
+    try:
+        bump_learning_watermarks()
+        log.info("learning watermarks refreshed")
+    except Exception as e:  # pragma: no cover
+        log.exception("learning watermark refresh failed: %s", e)
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is not None:
         return _scheduler
     sched = BackgroundScheduler(timezone="UTC")
-    # Daily batch at 02:00, purge at 03:00 (mirrors the pg_cron purge schedule).
+    # Daily batch at 02:00, purge at 03:00 (mirrors the pg_cron purge schedule),
+    # learning-integrity snapshot at 03:30 (after the purge, which never touches
+    # the learning stores).
     sched.add_job(daily_batch_job, "cron", hour=2, minute=0, id="daily_batch")
     sched.add_job(purge_job, "cron", hour=3, minute=0, id="purge")
+    sched.add_job(learning_health_job, "cron", hour=3, minute=30, id="learning_health")
     sched.start()
     _scheduler = sched
-    log.info("scheduler started (daily batch 02:00 UTC, purge 03:00 UTC)")
+    log.info("scheduler started (daily batch 02:00 UTC, purge 03:00 UTC, "
+             "learning snapshot 03:30 UTC)")
     return sched
 
 

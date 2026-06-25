@@ -57,6 +57,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # pragma: no cover - never block startup on the probe
         log.warning("Schema check skipped: %s", exc)
 
+    # Seed the learning-integrity high-water marks once at startup so a baseline
+    # exists right after a deploy (before the nightly snapshot job first runs).
+    try:
+        from app.metrics import bump_learning_watermarks
+
+        bump_learning_watermarks()
+    except Exception as exc:  # pragma: no cover - never block startup on the safeguard
+        log.warning("Learning watermark seed skipped: %s", exc)
+
     # Start the scheduler only with a real datastore (skip in offline dev).
     if not db.offline:
         start_scheduler()
@@ -110,6 +119,14 @@ def diag():
         info["schema_ok"] = not problems
         if problems:
             info["schema_problems"] = problems
+    # Learning-store integrity at a glance (status + total facts retained).
+    try:
+        from app.metrics import learning_health
+
+        h = learning_health()
+        info["learning"] = {"status": h["status"], "total": h["total"]}
+    except Exception as exc:  # pragma: no cover - diag must never 500
+        info["learning"] = {"status": "unknown", "error": str(exc)}
     return info
 
 
@@ -309,6 +326,15 @@ async def corrections_upload(files: list[UploadFile] = File(...)):
             "status": "processed",
         })
 
+    # Corrections just grew the learning stores — raise the integrity baseline so
+    # the new facts count as the expected floor going forward.
+    try:
+        from app.metrics import bump_learning_watermarks
+
+        bump_learning_watermarks()
+    except Exception as exc:  # never fail the upload over the safeguard
+        log.warning("learning watermark bump skipped: %s", exc)
+
     return {"processed": processed, "tickets_matched": matched, "tickets_unknown": unknown}
 
 
@@ -476,6 +502,15 @@ def learning_gtin_links_detail():
          "confirmations": r.get("confirmations"), "updated_at": r.get("updated_at")}
         for r in db.learning_gtin_xrefs()
     ]
+
+
+@app.get("/metrics/learning/health")
+def learning_health_status():
+    """Passive integrity check on the learning stores: are they intact and
+    growing, idle, or has a store shrunk below its high-water mark (data loss)?"""
+    from app.metrics import learning_health
+
+    return learning_health()
 
 
 @app.get("/corrections/uploads")
