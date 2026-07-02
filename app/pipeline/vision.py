@@ -73,7 +73,20 @@ Price rules (these are handwritten and the most important figures on the ticket)
   - If unsure of a digit, set a lower confidence rather than guessing — the line
     prices are reconciled against the grand total downstream.
 
-Dates as ISO YYYY-MM-DD. "lines" is ordered top-to-bottom.
+Secondary / partner billing labels: some tickets include an additional sticker
+from a partner company (e.g. a UNIKO instrument kit label). These are text-only
+— they carry a printed part number (REF) but no GS1 barcode. Include them as
+lines in the same "lines" array. IMPORTANT: always append these AFTER all of the
+main barcoded Maxx implant lines, even if the sticker appears physically beside an
+earlier label. For these lines:
+  - "ref": the printed part/catalogue number (e.g. "UKI0201-L") — read exactly.
+  - "lot": null (these labels usually carry no lot number).
+  - "unit_price": the handwritten price if one is written next to it, else null.
+  - "wasted": false unless a "W" or "I/O" is marked.
+  - "qty": null unless a count is written.
+
+Dates as ISO YYYY-MM-DD. "lines" is ordered top-to-bottom (main implant labels
+first, secondary partner labels appended at the end).
 """
 
 _EMPTY = {
@@ -128,7 +141,7 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         b64 = base64.standard_b64encode(redacted_img_bytes).decode("ascii")
         resp = client.messages.create(
             model=settings.anthropic_model,
-            max_tokens=2000,
+            max_tokens=3000,
             system=SYSTEM_PROMPT,
             messages=[
                 {

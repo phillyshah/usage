@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.7.3"
+VERSION = "2.7.4"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.7.4",
+        "date": "2026-07-02",
+        "notes": [
+            "UNIKO billing labels are now picked up: when a UNIKO instrument kit "
+            "sticker is pasted on the ticket, the tool reads its printed part number "
+            "(e.g. UKI0201-L) and adds it as a line — description, part type, and "
+            "category filled automatically — even though the UNIKO label has no barcode",
+        ],
+    },
     {
         "version": "2.7.3",
         "date": "2026-07-02",
