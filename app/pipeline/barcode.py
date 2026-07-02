@@ -266,6 +266,19 @@ def decode_region(grid_img) -> list[dict]:
             continue
         seen.add(raw)
         results.append(_parse_gs1(raw))
+
+    from app.pipeline import tracer
+    decoded_count = sum(1 for r in results if r.get("decoded"))
+    tracer.record(
+        "barcode_decode",
+        "GS1 / DataMatrix barcode decode",
+        "ok" if decoded_count > 0 else ("warn" if results else "skip"),
+        f"{len(results)} barcode(s) found, {decoded_count} decoded with GS1 data",
+        {"barcodes": [
+            {k: r.get(k) for k in ("raw", "decoded", "gtin", "lot", "expiry", "mfg", "ref")}
+            for r in results
+        ]},
+    )
     return results
 
 

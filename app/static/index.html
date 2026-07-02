@@ -122,6 +122,10 @@
               aria-selected="false" aria-controls="panel-reference" tabindex="-1">
         Reference Data
       </button>
+      <button type="button" class="tab tab-debug" id="tab-debug" role="tab"
+              aria-selected="false" aria-controls="panel-debug" tabindex="-1">
+        Debug
+      </button>
     </div>
 
     <!-- ===================== PANEL 1: Process Tickets ===================== -->
@@ -435,6 +439,53 @@
       </section>
 
     </div><!-- /#panel-reference -->
+
+    <!-- ===================== PANEL: Debug Console ===================== -->
+    <div id="panel-debug" class="tab-panel" role="tabpanel"
+         aria-labelledby="tab-debug" tabindex="0" hidden>
+
+      <section class="card debug-card">
+        <div class="step-head">
+          <span class="step-number" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="9"/>
+              <path d="M9 9h.01M15 9h.01"/>
+              <path d="M9 15c0 1.1 1.3 2 3 2s3-.9 3-2"/>
+            </svg>
+          </span>
+          <div>
+            <h2 class="step-title">Debug Console</h2>
+            <p class="step-help">Upload one ticket to see every decision the pipeline made: which barcodes decoded, what the AI read per field, which lookup tables matched, how prices were validated, and exactly why each cell ended up white, amber, or red.</p>
+          </div>
+        </div>
+
+        <form id="debug-form" class="debug-form">
+          <div id="debug-dropzone" class="dropzone debug-dropzone" tabindex="0"
+               role="button" aria-describedby="debug-drop-hint">
+            <div class="dropzone-inner">
+              <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor"
+                   stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+              <p class="dropzone-label">Drop a ticket photo here, or click to browse</p>
+              <p class="dropzone-sub" id="debug-drop-hint">One ticket at a time — JPEG, PNG, or PDF</p>
+            </div>
+            <input id="debug-input" type="file" accept="image/*,.pdf" hidden aria-label="Choose ticket file" />
+          </div>
+          <div id="debug-file-name" class="debug-file-name" hidden></div>
+          <button type="submit" id="debug-submit" class="btn btn-primary" disabled>
+            Run trace
+          </button>
+        </form>
+      </section>
+
+      <div id="debug-result" hidden></div>
+
+    </div><!-- /#panel-debug -->
+
   </main>
 
   <footer class="site-footer">

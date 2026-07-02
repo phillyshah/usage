@@ -159,6 +159,14 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
                 header_vals["rep"], header_conf["rep"] = learned_rep, "medium"
             elif str(learned_rep).strip().lower() == str(header_vals["rep"]).strip().lower():
                 header_conf["rep"] = "high"
+        from app.pipeline import tracer
+        tracer.record(
+            "rep_enrichment", "Rep code lookup",
+            "ok" if learned_rep else "miss",
+            (f"Code '{rep_code}' → '{learned_rep}' (from learning store)"
+             if learned_rep else f"Code '{rep_code}' not found in learning store"),
+            {"rep_code": rep_code, "vision_rep": header_vals.get("rep"), "learned_rep": learned_rep},
+        )
 
     freight = _money(_v(vision.get("freight")))
     grand_total = _money(_v(vision.get("grand_total")))
@@ -220,10 +228,11 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         price_conf = conf.score_field(
             {"vision": unit_price, "vision_conf": _c(vline.get("unit_price"))}
         )
+        _suggested_price = None
         if unit_price is not None and part.get("ref") and hospital:
-            suggested = db.price_suggestion(part["ref"], hospital)
-            if suggested is not None:
-                if abs(suggested - unit_price) < settings.sum_tolerance:
+            _suggested_price = db.price_suggestion(part["ref"], hospital)
+            if _suggested_price is not None:
+                if abs(_suggested_price - unit_price) < settings.sum_tolerance:
                     price_conf = "high"  # learned price agrees -> confident
                 else:
                     price_conf = "medium"  # disagreement -> eyeball it (never replace)
@@ -301,6 +310,48 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         if part.get("gtin") and part.get("ref") and part.get("in_part_info"):
             db.learn_gtin_xref(part["gtin"], part["ref"])
 
+        # Trace: per-line resolution + confidence for the debug console.
+        from app.pipeline import tracer
+        _price_trace: dict = {"vision_read": unit_price}
+        if _suggested_price is not None and unit_price is not None:
+            _diff = abs(_suggested_price - unit_price)
+            _price_trace.update({
+                "suggested": _suggested_price,
+                "diff": round(_diff, 2),
+                "outcome": "matches_learned" if _diff < settings.sum_tolerance else "disagrees_with_learned",
+            })
+        elif unit_price is not None:
+            _price_trace["outcome"] = "not_in_learning_store"
+        else:
+            _price_trace["outcome"] = "no_price_read"
+        _ref_label = part.get("ref") or "unknown REF"
+        _src = part.get("ref_source") or "none"
+        _in_pi = "in product master" if part.get("in_part_info") else "NOT in product master"
+        _price_str = f"${unit_price:.2f} ({price_conf})" if unit_price is not None else "no price"
+        _flag_str = f" — flags: {', '.join(lflags)}" if lflags else ""
+        tracer.record(
+            f"line_{i + 1}",
+            f"Line {i + 1} — REF {_ref_label}",
+            "ok" if part.get("in_part_info") else "warn",
+            f"REF {_ref_label} (source: {_src}), {_in_pi}, price {_price_str}{_flag_str}",
+            {
+                "barcode": {k: label.get(k) for k in
+                            ("gtin", "lot", "expiry", "mfg", "ref", "decoded", "raw")},
+                "vision": {
+                    "ref": _v(vline.get("ref")),
+                    "lot": _v(vline.get("lot")),
+                    "qty": qty_read,
+                    "unit_price": _v(vline.get("unit_price")),
+                    "wasted": _is_wasted(vline),
+                },
+                "part_resolution": part,
+                "price": _price_trace,
+                "confidence": cmap,
+                "wasted": wasted,
+                "flags": lflags,
+            },
+        )
+
         lines.append(row)
         line_conf.append(cmap)
 
@@ -334,6 +385,33 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
                 cm["unit_price"] = "high"
             if cm.get("line_total") == "medium":
                 cm["line_total"] = "high"
+
+    from app.pipeline import tracer
+    _freight_v = freight or 0
+    if grand_total is not None:
+        _diff_v = round(abs(float(grand_total) - (float(sum_line_totals or 0) + float(_freight_v))), 2)
+        _recon_summary = (
+            f"Lines ${sum_line_totals} + freight ${_freight_v:.2f} ≠ grand total ${grand_total} "
+            f"(diff ${_diff_v}) — prices ↓ amber"
+            if totals_off else
+            f"Lines ${sum_line_totals} + freight ${_freight_v:.2f} = ${grand_total} ✓ — prices ↑ confident"
+        )
+    else:
+        _diff_v = None
+        _recon_summary = "No grand total written — reconciliation skipped"
+    tracer.record(
+        "totals", "Price reconciliation",
+        "warn" if totals_off else "ok",
+        _recon_summary,
+        {
+            "grand_total": grand_total,
+            "sum_line_totals": sum_line_totals,
+            "freight": freight,
+            "diff": _diff_v,
+            "reconciled": not totals_off and grand_total is not None,
+            "flags": flags,
+        },
+    )
 
     # ---- persist line items + per-field snapshots (bulk, 2 round-trips) ----
     # Pre-generate line ids so the field-extraction rows can reference them

@@ -529,6 +529,64 @@ def corrections_uploads(limit: int = 50):
 
 
 # ---------------------------------------------------------------------------
+# Debug trace — single-ticket extraction with step-by-step visibility
+# ---------------------------------------------------------------------------
+@app.post("/debug/trace")
+async def debug_trace(file: UploadFile = File(...)):
+    """Upload one ticket image; run the full extraction pipeline with trace.
+
+    Returns the ticket ID plus a step-by-step record of what each pipeline
+    stage found: barcodes decoded, vision AI readings, part lookups, price
+    validation, and per-field confidence scores. The ticket is processed and
+    stored normally (it is real output, not a throwaway).
+    """
+    import contextvars
+
+    from app.pipeline import tracer as _tracer
+
+    data = await file.read()
+    filename = file.filename or "debug-ticket"
+
+    ctx = contextvars.copy_context()
+
+    def _run():
+        batch = db.create_batch()
+        ingest_result = ingest_image(data, filename, batch["id"])
+        ticket_id = ingest_result["ticket_id"]
+
+        if ingest_result["status"] != "pending_review":
+            return {
+                "ticket_id": ticket_id,
+                "filename": filename,
+                "status": ingest_result["status"],
+                "steps": [],
+                "result": {"error": (
+                    "Patient region not located — ticket routed to manual queue. "
+                    "Check that the image is a clear, unobstructed photo of a "
+                    "Maxx Orthopedics or Maxx Health usage ticket."
+                )},
+            }
+
+        ticket = db.get_ticket(ticket_id)
+        steps = _tracer.start()
+        try:
+            result = process_ticket(ticket)
+        finally:
+            _tracer.stop()
+
+        return {
+            "ticket_id": ticket_id,
+            "filename": filename,
+            "status": "ok",
+            "steps": steps,
+            "result": result,
+        }
+
+    loop = get_event_loop()
+    return await loop.run_in_executor(_executor, ctx.run, _run)
+
+
+# ---------------------------------------------------------------------------
 # Static UI (mounted last so API routes win). html=True serves index.html at /.
 # ---------------------------------------------------------------------------
 if STATIC_DIR.exists():
