@@ -116,6 +116,9 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
     uniform whether or not the API is configured.
     """
     if not settings.has_anthropic or not redacted_img_bytes:
+        from app.pipeline import tracer
+        tracer.record("vision_ai", "Vision AI extraction", "skip",
+                      "Skipped — no Anthropic API key configured or empty image", {})
         return json.loads(json.dumps(_EMPTY))
 
     try:
@@ -150,7 +153,29 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         text = "".join(
             block.text for block in resp.content if getattr(block, "type", None) == "text"
         )
-        return _parse(text)
+        result = _parse(text)
+        from app.pipeline import tracer
+        line_count = len(result.get("lines") or [])
+        usage = getattr(resp, "usage", None)
+        tokens_in = getattr(usage, "input_tokens", None)
+        tokens_out = getattr(usage, "output_tokens", None)
+        token_str = f" | {tokens_in}↑ {tokens_out}↓ tokens" if tokens_in is not None else ""
+        tracer.record(
+            "vision_ai",
+            f"Vision AI extraction ({settings.anthropic_model})",
+            "ok" if line_count > 0 else "warn",
+            f"{settings.anthropic_model} — {line_count} line(s) found{token_str}",
+            {
+                "model": settings.anthropic_model,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "header": result.get("header"),
+                "lines": result.get("lines"),
+                "freight": result.get("freight"),
+                "grand_total": result.get("grand_total"),
+            },
+        )
+        return result
     except Exception:
         # Never let a vision failure sink the batch; emit empty + let cells go red.
         return json.loads(json.dumps(_EMPTY))

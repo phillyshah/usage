@@ -208,6 +208,17 @@ export const api = {
     return request("/metrics/learning/health", { method: "GET" });
   },
 
+  /**
+   * POST /debug/trace (multipart, single file, field "file")
+   * -> {ticket_id, filename, status, steps:[{stage,label,status,summary,detail}], result}
+   * Runs the full extraction pipeline on one ticket with step-by-step trace.
+   */
+  debugTrace(file) {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request("/debug/trace", { method: "POST", body: fd });
+  },
+
   /** GET /version -> {version, changelog:[{version, date, notes:[]}]} */
   getVersion() {
     return request("/version", { method: "GET" });

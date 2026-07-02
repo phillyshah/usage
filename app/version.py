@@ -5,9 +5,20 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.7.2"
+VERSION = "2.7.3"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.7.3",
+        "date": "2026-07-02",
+        "notes": [
+            "New Debug Console tab: upload any ticket and see every step the pipeline took — "
+            "which barcodes decoded (GTIN, LOT, REF), what the AI read for each field, which "
+            "product master rows matched, whether the price agreed with what the tool learned, "
+            "and exactly why each cell ended up white, amber, or red. Use it to answer "
+            "'why did this come out wrong?' without guessing.",
+        ],
+    },
     {
         "version": "2.7.2",
         "date": "2026-06-25",

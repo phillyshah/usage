@@ -1138,6 +1138,175 @@ $("#start-over-btn").addEventListener("click", async () => {
 });
 
 /* ===================================================================== *
+ *  DEBUG CONSOLE
+ * ===================================================================== */
+const debugForm    = $("#debug-form");
+const debugDropzone = $("#debug-dropzone");
+const debugInput   = $("#debug-input");
+const debugFileLabel = $("#debug-file-name");
+const debugSubmit  = $("#debug-submit");
+const debugResult  = $("#debug-result");
+
+let _debugFile = null;
+
+function _setDebugFile(file) {
+  _debugFile = file || null;
+  if (_debugFile) {
+    debugFileLabel.textContent = `${_debugFile.name}  (${fmtBytes(_debugFile.size)})`;
+    debugFileLabel.hidden = false;
+  } else {
+    debugFileLabel.textContent = "";
+    debugFileLabel.hidden = true;
+  }
+  debugSubmit.disabled = !_debugFile;
+}
+
+// Click dropzone → open picker
+debugDropzone.addEventListener("click", () => debugInput.click());
+debugDropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); debugInput.click(); }
+});
+
+// Drag-and-drop
+debugDropzone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  debugDropzone.classList.add("is-over");
+});
+debugDropzone.addEventListener("dragleave", () => debugDropzone.classList.remove("is-over"));
+debugDropzone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  debugDropzone.classList.remove("is-over");
+  const f = e.dataTransfer && e.dataTransfer.files[0];
+  if (f) _setDebugFile(f);
+});
+
+debugInput.addEventListener("change", () => {
+  const f = debugInput.files && debugInput.files[0];
+  if (f) _setDebugFile(f);
+  debugInput.value = "";
+});
+
+/** Icon SVG for a trace step status */
+function _traceIcon(status) {
+  if (status === "ok")   return ICONS.check;
+  if (status === "warn") return ICONS.warn;
+  if (status === "fail") return ICONS.error;
+  // miss / skip
+  return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
+    stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="12" r="9"/><line x1="8" y1="12" x2="16" y2="12"/>
+  </svg>`;
+}
+
+/** Render a pretty-printed JSON value with max depth for readability */
+function _fmtDetail(obj) {
+  if (!obj || typeof obj !== "object") return String(obj ?? "");
+  return JSON.stringify(obj, null, 2);
+}
+
+function renderDebugTrace(data) {
+  debugResult.hidden = false;
+  debugResult.replaceChildren();
+
+  // Meta bar
+  const meta = el("div", { class: "debug-meta" });
+  meta.append(
+    el("span", { class: "debug-meta-file", text: `File: ${data.filename}` }),
+    el("span", { class: "debug-meta-id", text: `Ticket: ${data.ticket_id}` }),
+  );
+  if (data.status !== "ok") {
+    const msg = (data.result && data.result.error) || "Ticket could not be processed.";
+    meta.append(el("span", { class: "debug-meta-status is-warn", text: msg }));
+    debugResult.append(meta);
+    return;
+  }
+  debugResult.append(meta);
+
+  if (!data.steps || data.steps.length === 0) {
+    debugResult.append(el("p", { class: "muted-note", text: "No trace steps returned." }));
+    return;
+  }
+
+  const timeline = el("div", { class: "debug-timeline" });
+
+  for (let idx = 0; idx < data.steps.length; idx++) {
+    const step = data.steps[idx];
+    const details = document.createElement("details");
+    details.className = `debug-step is-${step.status}`;
+    if (idx === 0) details.open = true;   // first step open by default
+
+    const summary = document.createElement("summary");
+    summary.className = "debug-step-head";
+    summary.innerHTML = [
+      `<span class="debug-step-icon" aria-hidden="true">${_traceIcon(step.status)}</span>`,
+      `<span class="debug-step-label">${_esc(step.label)}</span>`,
+      `<span class="debug-step-summary">${_esc(step.summary)}</span>`,
+      `<span class="debug-step-chevron" aria-hidden="true">▸</span>`,
+    ].join("");
+
+    const body = el("div", { class: "debug-step-body" });
+    const pre = el("pre", { class: "debug-detail", text: _fmtDetail(step.detail) });
+    body.append(pre);
+
+    details.append(summary, body);
+    timeline.append(details);
+  }
+
+  debugResult.append(timeline);
+
+  // Final summary: how many high/medium/low
+  const result = data.result || {};
+  if (result.ticket_id && result.line_count != null) {
+    const summary2 = el("div", { class: "debug-summary" });
+    summary2.append(
+      el("span", { class: "debug-summary-text",
+        text: `${result.line_count} line(s) extracted. Ticket ID: ${result.ticket_id}.` }),
+    );
+    if (result.flags && result.flags.length > 0) {
+      summary2.append(el("ul", { class: "debug-flags" },
+        result.flags.map((f) => el("li", { text: f }))));
+    }
+    debugResult.append(summary2);
+  }
+}
+
+/** Minimal HTML-escape for inline injection */
+function _esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+debugForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!_debugFile) return;
+
+  debugSubmit.disabled = true;
+  const orig = debugSubmit.textContent;
+  debugSubmit.textContent = "Running trace…";
+  debugResult.hidden = true;
+  debugResult.replaceChildren();
+
+  try {
+    const data = await api.debugTrace(_debugFile);
+    renderDebugTrace(data);
+    toast("success", "Trace complete", `${data.steps ? data.steps.length : 0} steps captured.`);
+  } catch (err) {
+    renderNotice(debugResult, "error", "Trace failed",
+      [el("p", { class: "notice-text",
+        text: "The trace could not complete. Check the file is a JPEG, PNG, or PDF of a Maxx ticket." })],
+      errorDetail(err));
+    debugResult.hidden = false;
+    toast("error", "Trace failed");
+  } finally {
+    debugSubmit.disabled = false;
+    debugSubmit.textContent = orig;
+  }
+});
+
+/* ===================================================================== *
  *  Boot
  * ===================================================================== */
 checkHealth();
