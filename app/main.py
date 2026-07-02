@@ -22,7 +22,7 @@ from app.config import settings
 from app.db import db
 from app.jobs import shutdown_scheduler, start_scheduler
 from app.metrics import auto_resolve_by_week
-from app.pipeline.run import ingest_image, run_batch
+from app.pipeline.run import ingest_image, process_ticket, run_batch
 from app.storage import OUTPUT_SHEETS, get_object, split_ref
 from app.supabase_key import WRONG_KEY_HELP, detect_key_role
 from app.version import CHANGELOG, VERSION
