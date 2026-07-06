@@ -141,7 +141,8 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         b64 = base64.standard_b64encode(redacted_img_bytes).decode("ascii")
         resp = client.messages.create(
             model=settings.anthropic_model,
-            max_tokens=3000,
+            max_tokens=8000,
+            thinking={"type": "adaptive"},
             system=SYSTEM_PROMPT,
             messages=[
                 {

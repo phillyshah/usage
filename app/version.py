@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.7.4"
+VERSION = "2.8.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.8.0",
+        "date": "2026-07-06",
+        "notes": [
+            "Upgraded the reading model to Claude Sonnet 5: it works from a much "
+            "sharper view of your photos (roughly 2.7x the detail), so handwritten "
+            "prices, quantities, and small printed REF codes read more accurately — "
+            "expect more white cells and fewer amber ones on the same tickets",
+        ],
+    },
     {
         "version": "2.7.4",
         "date": "2026-07-02",
