@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # --- Anthropic (vision fallback) ---
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-sonnet-4-6"
+    anthropic_model: str = "claude-sonnet-5"
 
     # --- Supabase (Postgres + Storage) ---
     supabase_url: str = ""

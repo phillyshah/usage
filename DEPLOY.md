@@ -30,7 +30,7 @@ is marked **[you]** (needs your accounts/secrets/DNS/VPS access) or **[code]**
 
 ## 2. Anthropic — vision + BAA
 
-1. **[you]** Get an API key. Set `ANTHROPIC_MODEL=claude-sonnet-4-6`.
+1. **[you]** Get an API key. Set `ANTHROPIC_MODEL=claude-sonnet-5`.
 2. **[you] (compliance)** Request a **HIPAA BAA** from Anthropic before processing real
    tickets. Redaction removes PHI at ingest, but the BAA is the defense-in-depth net
    the spec (§9) requires in case redaction ever misses.
@@ -43,7 +43,7 @@ OFFLINE_MODE=false
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_KEY=<service-role-key>
 ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-4-6
+ANTHROPIC_MODEL=claude-sonnet-5
 RETENTION_DAYS=14
 ```
 `.env` is gitignored — keep it off GitHub. Secrets reach the container via `env_file`.

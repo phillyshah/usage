@@ -86,7 +86,7 @@ System libs (in the image, see Dockerfile): `libdmtx0`, `libzbar0`, `libgl1`, `l
 ## 4. Config / env (`.env.example`)
 ```
 ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-sonnet-4-6
+ANTHROPIC_MODEL=claude-sonnet-5
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_KEY=<service-role-key>     # server-side only, never ship to a client
 RETENTION_DAYS=14                            # mirrors app_settings; informational
