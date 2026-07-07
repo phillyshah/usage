@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     sum_tolerance: float = 0.01
     # Minimum model confidence to write a value: one of high|medium|low.
     vision_conf_threshold: str = "medium"
+    # A single line price at/above this is implausible for these tickets and is
+    # flagged as a likely misread digit (e.g. "$650" read as 8650). Real line
+    # prices run $50–$2,500, so 7500 leaves generous headroom.
+    price_sanity_max: float = 7500
 
     # --- Local / offline development ---
     # When true the app runs without Supabase or Anthropic: it uses an on-disk

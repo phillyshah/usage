@@ -145,9 +145,11 @@ def process_ticket(ticket: dict) -> dict:
 
     template = ticket.get("entity") or "Maxx Orthopedics"
 
-    # Deterministic first: decode device labels from the grid region.
+    # Deterministic first: decode device labels from the grid region. Junk
+    # payloads (e.g. a patient wristband barcode) are filtered out before the
+    # vision merge so they can't occupy a line slot or shift the pairing.
     grid = _grid_crop(img, template)
-    labels = barcode.decode_region(grid) if grid is not None else []
+    labels = barcode.drop_junk_labels(barcode.decode_region(grid)) if grid is not None else []
 
     # Vision fallback: header, prices, qty, totals (single call on redacted bytes).
     vresult = vision.extract_handwritten(redacted_bytes) if redacted_bytes else vision.extract_handwritten(b"")

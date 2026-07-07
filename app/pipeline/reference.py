@@ -30,29 +30,38 @@ def resolve_part(ref: str | None, gtin: str | None, lot: str | None) -> dict:
     """
     result: dict = {
         "ref": None,
-        "ref_source": None,        # gtin | barcode_240 | printed | lot | None
+        "ref_source": None,        # gtin | gtin_learned | printed | lot | None
         "gtin": gtin,
         "gtin_status": None,
         "in_gtin_master": False,
         "description": None,
+        "size": None,
         "part_type": None,
         "category": None,
         "in_part_info": False,
+        "desc_source": None,       # part_info | correction | expiry_log | None
         "expiry_ref": None,
         "in_expiry_log": False,
         "ref_crosscheck_ok": None,  # gtin-SKU vs printed/(240) REF agree?
     }
 
-    # 1. Ref Number — GTIN master is primary; (240)/printed/lot are fallbacks.
+    # 1. Ref Number — GTIN master is primary; the learned GTIN→REF crosswalk
+    # (built from your corrections) covers master misses; (240)/printed/lot
+    # remain the fallbacks.
     sku = None
+    ref_source = "gtin"
     if gtin:
         grow = db.sku_for_gtin(gtin)
         if grow:
             result["in_gtin_master"] = True
             result["gtin_status"] = grow.get("status")
             sku = grow.get("sku")
+        else:
+            learned_sku = db.ref_for_gtin(gtin)
+            if learned_sku:
+                sku, ref_source = learned_sku, "gtin_learned"
     if sku:
-        result["ref"], result["ref_source"] = sku, "gtin"
+        result["ref"], result["ref_source"] = sku, ref_source
         if ref:  # cross-check the read REF against the authoritative SKU
             result["ref_crosscheck_ok"] = (str(ref).strip() == str(sku).strip())
     elif ref:
@@ -63,13 +72,24 @@ def resolve_part(ref: str | None, gtin: str | None, lot: str | None) -> dict:
             result["ref"], result["ref_source"] = lot_row["part_no"], "lot"
 
     # 2. Description / Part Type / Category via part_info (exact REF, incl. +/-).
+    # On a part_info miss, fall back to the learned descriptions (from your
+    # corrections) or the Expiry Log parts sheet.
     if result["ref"]:
         pinfo = db.part_info_for_ref(result["ref"])
         if pinfo:
             result["in_part_info"] = True
+            result["desc_source"] = "part_info"
             result["description"] = pinfo.get("description")
             result["part_type"] = pinfo.get("part_type")
             result["category"] = pinfo.get("category")
+        else:
+            prow = db.resolve_part_desc(result["ref"])
+            if prow and (prow.get("description") or prow.get("size")):
+                result["description"] = prow.get("description")
+                result["size"] = prow.get("size")
+                result["desc_source"] = (
+                    "correction" if prow.get("from_correction") else "expiry_log"
+                )
 
     # 3. Authoritative lot expiry from the Expiry Log (cross-check vs barcode).
     if lot:
@@ -89,6 +109,7 @@ def resolve_surgeon(surgeon_last_name: str | None, dist_code: str | None) -> dic
     """
     result: dict = {
         "matched": False,
+        "source": None,             # master | learned | None
         "key": surgeon_key(surgeon_last_name, dist_code),
         "surgeon_full_name": None,
         "hospital": None,
@@ -102,6 +123,7 @@ def resolve_surgeon(surgeon_last_name: str | None, dist_code: str | None) -> dic
     if row:
         result.update({
             "matched": True,
+            "source": "master",
             "surgeon_full_name": row.get("surgeon_full_name"),
             "hospital": row.get("hospital"),
             "region": row.get("region"),
@@ -109,5 +131,17 @@ def resolve_surgeon(surgeon_last_name: str | None, dist_code: str | None) -> dic
             "distributor_rep": row.get("distributor_rep"),
             "sales_manager": row.get("sales_manager"),
             "status": row.get("status"),
+        })
+        return result
+
+    # Master miss: fall back to the surgeon links learned from corrections.
+    learned = db.learned_surgeon_for_key(result["key"]) if result["key"] else None
+    if learned:
+        result.update({
+            "matched": True,
+            "source": "learned",
+            "surgeon_full_name": learned.get("surgeon_full_name"),
+            "hospital": learned.get("hospital"),
+            "dist_code": learned.get("dist_code"),
         })
     return result

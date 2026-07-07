@@ -151,6 +151,16 @@ create table if not exists learning_gtin_xref (
   updated_at    timestamptz not null default now()
 );
 
+-- <SurgeonLastName><DistCode> -> surgeon/hospital/dist code learned from
+-- corrected sheets. Fallback only — the reference_surgeons master always wins.
+create table if not exists learning_surgeon_map (
+  surgeon_key       text primary key,
+  surgeon_full_name text,
+  hospital          text,
+  dist_code         text,
+  updated_at        timestamptz not null default now()
+);
+
 -- ----------------------------------------------------------------------------
 -- 3. Operational / extraction records
 -- ----------------------------------------------------------------------------
@@ -307,6 +317,7 @@ begin
     'app_settings','reference_lots','reference_parts','log_ingests',
     'reference_gtin','reference_part_info','reference_surgeons','masters_ingests',
     'learning_part_desc','learning_rep_map','learning_price','learning_gtin_xref',
+    'learning_surgeon_map',
     'batches','tickets','line_items','field_extractions',
     'corrections_audit','corrected_uploads'
   ] loop

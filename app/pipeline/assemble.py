@@ -13,7 +13,8 @@ import re
 from app.config import settings
 from app.db import db, new_id
 from app.pipeline import confidence as conf
-from app.pipeline.reference import resolve_part
+from app.pipeline.align import align_vision_lines
+from app.pipeline.reference import resolve_part, resolve_surgeon
 
 # Field-name constants (kept in sync with sheets/write.py).
 TICKET_FIELDS = [
@@ -137,6 +138,16 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     vheader = vision.get("header", {}) if vision else {}
     vlines = vision.get("lines", []) if vision else []
 
+    # Re-pair vision lines with barcode labels by content (LOT, then REF) —
+    # the two lists arrive in different orders (decode order vs top-to-bottom).
+    # GTIN-only labels first get a matchable SKU from the GTIN master (or the
+    # learned crosswalk) so REF matching isn't blind for them.
+    for lbl in labels:
+        if lbl.get("gtin") and not lbl.get("ref"):
+            grow = db.sku_for_gtin(lbl["gtin"])
+            lbl["_sku"] = (grow or {}).get("sku") or db.ref_for_gtin(lbl["gtin"])
+    vlines = align_vision_lines(labels, vlines)
+
     # ---- ticket header fields ----
     header_vals: dict = {}
     header_conf: dict = {}
@@ -179,9 +190,16 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         {"vision": grand_total, "vision_conf": _c(vision.get("grand_total"))}
     )
 
+    # Canonical hospital for the price memory: prefer the handwritten hospital,
+    # else resolve it from the surgeon+DistCode chain (master, then learned).
+    # Used only to key learned prices — the header output is unchanged.
     hospital = header_vals.get("hospital")
+    if not hospital:
+        _surg = resolve_surgeon(header_vals.get("surgeon"), header_vals.get("rep_code"))
+        if _surg.get("matched"):
+            hospital = _surg.get("hospital")
 
-    # ---- line items: merge barcode labels with vision price/qty by order ----
+    # ---- line items: merge each barcode label with its aligned vision line ----
     lines: list[dict] = []
     line_conf: list[dict] = []
     raw_blobs: list[dict] = []  # exactly what each source produced, pre-resolution
@@ -224,18 +242,30 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         qty = _qty(qty_read)
         unit_price = _money(_v(vline.get("unit_price")))
 
-        # Hospital price memory: suggestion only, never override.
+        # Hospital price memory: fills a blank price for the SAME hospital
+        # (amber + note, so it's always reviewed); never overrides a read price
+        # — a read price that disagrees is flagged for an eyeball instead.
         price_conf = conf.score_field(
             {"vision": unit_price, "vision_conf": _c(vline.get("unit_price"))}
         )
+        price_note = None
         _suggested_price = None
-        if unit_price is not None and part.get("ref") and hospital:
+        _price_filled = False
+        if part.get("ref") and hospital:
             _suggested_price = db.price_suggestion(part["ref"], hospital)
-            if _suggested_price is not None:
-                if abs(_suggested_price - unit_price) < settings.sum_tolerance:
-                    price_conf = "high"  # learned price agrees -> confident
-                else:
-                    price_conf = "medium"  # disagreement -> eyeball it (never replace)
+        if _suggested_price is not None:
+            if unit_price is None:
+                unit_price = _suggested_price
+                price_conf = "medium"  # learned fill -> always eyeball it
+                _price_filled = True
+                price_note = (f"Price ${_suggested_price:,.2f} filled from the "
+                              f"learned price for this hospital — verify")
+            elif abs(_suggested_price - unit_price) < settings.sum_tolerance:
+                price_conf = "high"  # learned price agrees -> confident
+            else:
+                price_conf = "medium"  # disagreement -> eyeball it (never replace)
+                price_note = (f"Price differs from the learned price "
+                              f"${_suggested_price:,.2f} for this hospital")
 
         line_total = round(qty * unit_price, 2) if unit_price is not None else None
 
@@ -261,6 +291,13 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             lflags.append("LOT not in Expiry Log")
         if label.get("expiry") and part.get("expiry_ref") and label["expiry"] != part["expiry_ref"]:
             lflags.append("Barcode expiry disagrees with Expiry Log")
+        if price_note:
+            lflags.append(price_note)
+        if unit_price is not None and unit_price >= settings.price_sanity_max:
+            if price_conf == "high":
+                price_conf = "medium"  # implausible magnitude -> eyeball it
+            lflags.append(
+                f"Unusually large price ${unit_price:,.2f} — check for a misread digit")
 
         row = {
             "ticket_id": ticket_id,
@@ -288,14 +325,16 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             ref_conf = "high" if part.get("ref_source") == "gtin" else "medium"
             desc_conf = ref_conf
         elif part.get("ref"):
-            ref_conf = "medium" if part.get("ref_source") == "gtin" else "low"
-            desc_conf = "low"
+            ref_conf = "medium" if part.get("ref_source") in ("gtin", "gtin_learned") else "low"
+            # A description recovered from a correction / the Expiry Log is a
+            # real value (worth showing) but not master-confirmed -> medium.
+            desc_conf = "medium" if part.get("description") else "low"
         else:
             ref_conf = desc_conf = "low"
         cmap = {
             "ref": ref_conf,
             "description": desc_conf,
-            "size": "low",
+            "size": "medium" if part.get("size") else "low",
             "lot": "high" if label.get("lot") else ("medium" if lot_in else "low"),
             # 1-by-default is high; a vision-read count is scored like other reads.
             "qty": (conf.score_field({"vision": qty_read, "vision_conf": _c(vline.get("qty"))})
@@ -312,8 +351,15 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
 
         # Trace: per-line resolution + confidence for the debug console.
         from app.pipeline import tracer
-        _price_trace: dict = {"vision_read": unit_price}
-        if _suggested_price is not None and unit_price is not None:
+        _price_trace: dict = {
+            "vision_read": None if _price_filled else unit_price,
+        }
+        if _price_filled:
+            _price_trace.update({
+                "suggested": _suggested_price,
+                "outcome": "filled_from_learned",
+            })
+        elif _suggested_price is not None and unit_price is not None:
             _diff = abs(_suggested_price - unit_price)
             _price_trace.update({
                 "suggested": _suggested_price,

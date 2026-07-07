@@ -504,6 +504,18 @@ def learning_gtin_links_detail():
     ]
 
 
+@app.get("/metrics/learning/surgeon-links")
+def learning_surgeon_links_detail():
+    """Full contents of the learned surgeon/hospital map, newest first."""
+    return [
+        {"surgeon_key": r.get("surgeon_key"),
+         "surgeon_full_name": r.get("surgeon_full_name"),
+         "hospital": r.get("hospital"), "dist_code": r.get("dist_code"),
+         "updated_at": r.get("updated_at")}
+        for r in db.learning_surgeon_maps()
+    ]
+
+
 @app.get("/metrics/learning/health")
 def learning_health_status():
     """Passive integrity check on the learning stores: are they intact and

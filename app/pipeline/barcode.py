@@ -282,6 +282,29 @@ def decode_region(grid_img) -> list[dict]:
     return results
 
 
+def drop_junk_labels(labels: list[dict]) -> list[dict]:
+    """Drop non-product barcodes (e.g. a patient wristband's linear code).
+
+    A payload that carries no GS1 device data (no GTIN/LOT/REF, decoded=False)
+    contributes nothing to a line and — worse — occupies a slot in the label
+    list, shifting the pairing with the vision-read lines. The raw payloads
+    remain visible in the decode trace recorded by decode_region.
+    """
+    kept = [l for l in labels
+            if l.get("decoded") or l.get("gtin") or l.get("ref") or l.get("lot")]
+    dropped = [l.get("raw") for l in labels if l not in kept]
+    if dropped:
+        from app.pipeline import tracer
+        tracer.record(
+            "barcode_filter",
+            "Non-product barcode filter",
+            "warn",
+            f"Dropped {len(dropped)} non-product barcode(s) (no GS1 device data)",
+            {"dropped": dropped},
+        )
+    return kept
+
+
 def decode_single(raw_payload: str) -> dict:
     """Parse one already-decoded raw GS1 string (used in tests/tooling)."""
     return _parse_gs1(raw_payload)

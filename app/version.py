@@ -5,9 +5,29 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.9.0",
+        "date": "2026-07-07",
+        "notes": [
+            "Prices now stick to the right implant: each handwritten price is "
+            "matched to its label by LOT and REF instead of by position, fixing "
+            "tickets where prices landed on the wrong line, a label was counted "
+            "twice, or one went missing",
+            "Patient wristband barcodes are ignored — they no longer create an "
+            "empty row or shift every price down a line",
+            "Your corrections now directly improve extraction: learned "
+            "barcode→part links, part descriptions/sizes, and surgeon/hospital "
+            "links fill in when the master lists miss, and a blank price is "
+            "filled from the learned price for that same hospital (shown amber "
+            "with a note so you can verify)",
+            "New 'surgeon/hospital links' learning category in the History tab",
+            "A suspiciously large price (e.g. a '$' misread as an '8') is now "
+            "flagged for review",
+        ],
+    },
     {
         "version": "2.8.0",
         "date": "2026-07-06",

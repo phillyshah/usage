@@ -171,9 +171,9 @@ export const api = {
 
   /**
    * GET /metrics/learning?days=N
-   * -> {cumulative:{prices, part_descriptions, reps, gtin_links},
+   * -> {cumulative:{prices, part_descriptions, reps, gtin_links, surgeon_links},
    *     daily:[{date, corrections_made, blanks_filled, low_conf_fixed,
-   *             facts_learned:{prices, part_descriptions, reps, gtin_links}}]}
+   *             facts_learned:{prices, part_descriptions, reps, gtin_links, surgeon_links}}]}
    *     (daily newest-first)
    */
   learningMetrics(days = 14) {
