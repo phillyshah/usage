@@ -66,6 +66,19 @@ RETENTION_DAYS=14
 
 ## 5. Deploy
 
+> **Upgrading to v2.9.0 from an existing install:** run this once in the
+> Supabase SQL Editor before deploying (new learning store; additive only):
+> ```sql
+> create table if not exists learning_surgeon_map (
+>   surgeon_key       text primary key,
+>   surgeon_full_name text,
+>   hospital          text,
+>   dist_code         text,
+>   updated_at        timestamptz not null default now()
+> );
+> alter table learning_surgeon_map enable row level security;
+> ```
+
 **[you]** On the VPS, from the repo root:
 ```bash
 make deploy        # docker compose up -d --build

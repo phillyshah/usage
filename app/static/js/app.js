@@ -807,6 +807,16 @@ const LEARN_KINDS = {
       { label: "Date linked", key: "updated_at", cls: "learn-date", fmt: mdy },
     ],
   },
+  surgeon_links: {
+    title: "Learned surgeon/hospital links",
+    endpoint: "surgeon-links",
+    cols: [
+      { label: "Surgeon",   key: "surgeon_full_name", cls: "learn-key" },
+      { label: "Dist code", key: "dist_code",         cls: "" },
+      { label: "Hospital",  key: "hospital",          cls: "learn-desc" },
+      { label: "Date learned", key: "updated_at",     cls: "learn-date", fmt: mdy },
+    ],
+  },
 };
 
 async function openLearningDetail(kind) {
@@ -908,6 +918,7 @@ function factsSummary(facts) {
   if (num(facts, "part_descriptions")) parts.push(pluralize(num(facts, "part_descriptions"), "part description"));
   if (num(facts, "reps")) parts.push(pluralize(num(facts, "reps"), "rep"));
   if (num(facts, "gtin_links")) parts.push(pluralize(num(facts, "gtin_links"), "barcode link"));
+  if (num(facts, "surgeon_links")) parts.push(pluralize(num(facts, "surgeon_links"), "surgeon link"));
   return parts.length ? `learned ${parts.join(", ")}` : "";
 }
 
@@ -944,7 +955,8 @@ async function loadLearning() {
   }
 
   const cum = (data && data.cumulative) || {};
-  const total = num(cum, "prices") + num(cum, "part_descriptions") + num(cum, "reps") + num(cum, "gtin_links");
+  const total = num(cum, "prices") + num(cum, "part_descriptions") + num(cum, "reps")
+    + num(cum, "gtin_links") + num(cum, "surgeon_links");
   if (total === 0) {
     learningTotals.replaceChildren(
       el("div", { class: "empty-state" }, [
@@ -958,6 +970,7 @@ async function loadLearning() {
         statBtn(num(cum, "part_descriptions"), "part descriptions", "part_descriptions"),
         statBtn(num(cum, "reps"), "reps", "reps"),
         statBtn(num(cum, "gtin_links"), "barcode→part links", "gtin_links"),
+        statBtn(num(cum, "surgeon_links"), "surgeon/hospital links", "surgeon_links"),
       ]));
   }
 

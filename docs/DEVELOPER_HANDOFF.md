@@ -158,7 +158,7 @@ def validate_ticket(ticket: dict, lines: list[dict]) -> list[str]:
 
 **`sheets/write.py`** — fills per cell: confident=no fill, medium=`FFF2CC`, low/blank=`F4CCCC`. Three sheets: Tickets, Line Items, Legend. Ticket/Line IDs uncolored.
 
-**`learning/harvest.py`** — for each corrected row, upsert into `learning_part_desc` (REF→desc/size), `learning_rep_map` (code→rep), `learning_price` (REF+hospital→price), `learning_gtin_xref` (gtin→ref). Self-contained; runs regardless of retention.
+**`learning/harvest.py`** — for each corrected row, upsert into `learning_part_desc` (REF→desc/size), `learning_rep_map` (code→rep), `learning_price` (REF+hospital→price), `learning_gtin_xref` (gtin→ref), `learning_surgeon_map` (surgeon+distcode→surgeon/hospital). Self-contained; runs regardless of retention. All of these are read back during extraction (`resolve_part`, `resolve_surgeon`, the price fill in `assemble.py`), so corrections directly improve re-runs.
 
 **`learning/diff.py`** — if `field_extractions` still present for the ticket, compare and write `corrections_audit` (set `was_blank`/`was_low_conf`). Skip silently if purged.
 

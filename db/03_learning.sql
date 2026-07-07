@@ -28,3 +28,13 @@ create table if not exists learning_gtin_xref (
   confirmations integer not null default 1,
   updated_at    timestamptz not null default now()
 );
+
+-- <SurgeonLastName><DistCode> -> surgeon/hospital/dist code learned from
+-- corrected sheets. Fallback only — the reference_surgeons master always wins.
+create table if not exists learning_surgeon_map (
+  surgeon_key       text primary key,
+  surgeon_full_name text,
+  hospital          text,
+  dist_code         text,
+  updated_at        timestamptz not null default now()
+);

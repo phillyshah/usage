@@ -5,15 +5,17 @@ row is self-contained (it already holds REF, description, size, hospital, price,
 rep, code). Self-contained and idempotent: re-harvesting the same facts is
 harmless.
 
-  Corrected value          -> learning store       (key)
-  Description / Size        -> learning_part_desc   (REF)
-  Rep name                  -> learning_rep_map     (Rep/Distributor Code)
-  Unit Price                -> learning_price        (REF + Hospital)
-  REF (with decoded GTIN)   -> learning_gtin_xref   (GTIN)
+  Corrected value          -> learning store        (key)
+  Description / Size        -> learning_part_desc    (REF)
+  Rep name                  -> learning_rep_map      (Rep/Distributor Code)
+  Unit Price                -> learning_price         (REF + Hospital)
+  REF (with decoded GTIN)   -> learning_gtin_xref    (GTIN)
+  Surgeon / Hospital        -> learning_surgeon_map  (<SurgeonLastName><DistCode>)
 """
 from __future__ import annotations
 
 from app.db import db
+from app.learning.ingest_reference import surgeon_key
 
 
 def _num(v):
@@ -30,15 +32,29 @@ def harvest_ticket(corrected: dict) -> dict:
 
     Returns counts of what was learned.
     """
-    counts = {"part_desc": 0, "rep": 0, "price": 0, "gtin_xref": 0}
+    counts = {"part_desc": 0, "rep": 0, "price": 0, "gtin_xref": 0, "surgeon_map": 0}
 
     hospital = corrected.get("hospital")
     rep = corrected.get("rep")
     rep_code = corrected.get("rep_code")
+    surgeon = corrected.get("surgeon")
 
     if rep_code and rep:
         db.learn_rep(str(rep_code).strip(), str(rep).strip())
         counts["rep"] += 1
+
+    # Surgeon chain: <SurgeonLastName><DistCode> -> surgeon/hospital/dist code,
+    # so a corrected header teaches the tool combinations the master lacks.
+    if surgeon and rep_code:
+        key = surgeon_key(str(surgeon).strip(), str(rep_code).strip())
+        if key:
+            db.learn_surgeon_map(
+                key,
+                str(surgeon).strip(),
+                str(hospital).strip() if hospital else None,
+                str(rep_code).strip(),
+            )
+            counts["surgeon_map"] += 1
 
     for line in (corrected.get("lines") or {}).values():
         ref = line.get("ref")

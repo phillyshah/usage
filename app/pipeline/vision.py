@@ -65,6 +65,8 @@ Price rules (these are handwritten and the most important figures on the ticket)
     "1,900" -> 1900, "68" -> 68. Keep cents if written ("68.50" -> 68.5).
   - A price that is crossed out / struck through, or written as "0", "Ø", "∅", "-",
     or "N/C" means NO CHARGE: return 0 for that line's unit_price (do not omit the line).
+  - The "$" currency sign is NOT a digit: "$650" is 650, never 8650. If the first
+    mark could be either a "$" or an "8", read it as "$" and lower the confidence.
   - Read each price for the label it sits beside; keep "lines" ordered top-to-bottom
     and align each price to its own label. Skip empty slots that read
     "Place Implant Label".

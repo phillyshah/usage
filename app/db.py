@@ -50,6 +50,7 @@ _LOCAL_TABLES = [
     "learning_rep_map",
     "learning_price",
     "learning_gtin_xref",
+    "learning_surgeon_map",
     "batches",
     "tickets",
     "line_items",
@@ -465,6 +466,23 @@ class Database:
             },
         )
 
+    def learn_surgeon_map(self, key: str, surgeon_full_name: str | None,
+                          hospital: str | None, dist_code: str | None) -> None:
+        """Learned surgeon chain from corrections: <SurgeonLastName><DistCode>
+        -> surgeon/hospital/dist code. Additive upsert, mirrors the reference
+        surgeons master shape (fallback only — the master always wins)."""
+        self.backend.upsert(
+            "learning_surgeon_map",
+            ["surgeon_key"],
+            {
+                "surgeon_key": key,
+                "surgeon_full_name": surgeon_full_name,
+                "hospital": hospital,
+                "dist_code": dist_code,
+                "updated_at": _now_iso(),
+            },
+        )
+
     def learn_gtin_xref(self, gtin: str, part_no: str) -> None:
         existing = self.backend.find_one("learning_gtin_xref", "gtin", gtin)
         confirmations = (existing.get("confirmations", 0) + 1) if existing else 1
@@ -494,6 +512,12 @@ class Database:
     def ref_for_gtin(self, gtin: str) -> str | None:
         r = self.backend.find_one("learning_gtin_xref", "gtin", gtin)
         return r.get("part_no") if r else None
+
+    def learned_surgeon_for_key(self, key: str) -> dict | None:
+        if not key:
+            return None
+        return (self.backend.find_one("learning_surgeon_map", "surgeon_key", key)
+                or self.backend.find_one_ci("learning_surgeon_map", "surgeon_key", key))
 
     # ---- batches ----
     def create_batch(self) -> dict:
@@ -623,6 +647,7 @@ class Database:
             "learning_part_desc": "updated_at",
             "learning_rep_map": "updated_at",
             "learning_gtin_xref": "updated_at",
+            "learning_surgeon_map": "updated_at",
         }
         return {t: self.backend.table_stats(t, stamp_col=col).get("rows", 0)
                 for t, col in specs.items()}
@@ -641,6 +666,10 @@ class Database:
 
     def learning_gtin_xrefs(self) -> list[dict]:
         rows = self.backend.select("learning_gtin_xref")
+        return sorted(rows, key=lambda r: r.get("updated_at") or "", reverse=True)
+
+    def learning_surgeon_maps(self) -> list[dict]:
+        rows = self.backend.select("learning_surgeon_map")
         return sorted(rows, key=lambda r: r.get("updated_at") or "", reverse=True)
 
     # ---- app_settings (key/value) ----

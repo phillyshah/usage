@@ -17,7 +17,7 @@
 - **Never commit real ticket photos** — .gitignore blocks *.jpeg, MH*.jpg, MO*.jpg, tests/fixtures/real/
 - **PHI gate:** patient region masked before any storage; failure routes to manual queue
 - **Anthropic account must run under a HIPAA BAA**
-- **Learning tables** (`learning_price`, `learning_part_desc`, `learning_rep_map`, `learning_gtin_xref`, `corrections_audit`, `corrected_uploads`) — flag explicitly before any work that could risk these
+- **Learning tables** (`learning_price`, `learning_part_desc`, `learning_rep_map`, `learning_gtin_xref`, `learning_surgeon_map`, `corrections_audit`, `corrected_uploads`) — flag explicitly before any work that could risk these
 
 ## Branch
 Active dev branch: `claude/clever-cerf-oaqc5g`

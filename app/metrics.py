@@ -131,6 +131,7 @@ _LEARNING_TABLES = [
     ("learning_part_desc", "updated_at", "part_descriptions"),
     ("learning_rep_map", "updated_at", "reps"),
     ("learning_gtin_xref", "updated_at", "gtin_links"),
+    ("learning_surgeon_map", "updated_at", "surgeon_links"),
 ]
 
 

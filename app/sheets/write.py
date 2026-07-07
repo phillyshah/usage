@@ -312,8 +312,12 @@ def _write_usage_sheet(ws, tickets) -> None:
                     attr = kind.split(":", 1)[1]
                     if surg["matched"]:
                         val = surg.get(attr)
-                        conf = "high"
-                        if attr == "hospital" and hosp_mismatch:
+                        # Master match is deterministic (high); a match learned
+                        # from corrections is real but unverified -> medium.
+                        conf = "medium" if surg.get("source") == "learned" else "high"
+                        if val is None:  # learned rows don't carry every column
+                            conf = "low"
+                        elif attr == "hospital" and hosp_mismatch:
                             conf = "medium"  # cross-check disagreement -> eyeball
                     else:
                         conf, val = "low", None
