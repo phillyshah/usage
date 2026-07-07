@@ -5,9 +5,23 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.9.0"
+VERSION = "2.10.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.10.0",
+        "date": "2026-07-07",
+        "notes": [
+            "Debug Console: after running a trace, you can now correct any "
+            "field right there — REF, description, price, surgeon, hospital, "
+            "and more — or click 'Confirm all as correct' to accept everything "
+            "at once. Either way it teaches the same learned prices, "
+            "descriptions, and surgeon/hospital links as re-uploading a "
+            "corrected spreadsheet, without leaving the page",
+            "The raw pipeline trace (barcode decode, AI read, per-line "
+            "resolution) is still there, now tucked under a 'Raw trace' toggle",
+        ],
+    },
     {
         "version": "2.9.0",
         "date": "2026-07-07",

@@ -1235,10 +1235,20 @@ function renderDebugTrace(data) {
   }
   debugResult.append(meta);
 
+  const result = data.result || {};
+  if (result.lines) {
+    debugResult.append(renderDebugReviewForm(data));
+  }
+
   if (!data.steps || data.steps.length === 0) {
     debugResult.append(el("p", { class: "muted-note", text: "No trace steps returned." }));
     return;
   }
+
+  const rawToggle = document.createElement("details");
+  rawToggle.className = "debug-raw-toggle";
+  const rawSummary = el("summary", { text: "Raw trace (all pipeline steps)" });
+  rawToggle.append(rawSummary);
 
   const timeline = el("div", { class: "debug-timeline" });
 
@@ -1265,10 +1275,10 @@ function renderDebugTrace(data) {
     timeline.append(details);
   }
 
-  debugResult.append(timeline);
+  rawToggle.append(timeline);
+  debugResult.append(rawToggle);
 
   // Final summary: how many high/medium/low
-  const result = data.result || {};
   if (result.ticket_id && result.line_count != null) {
     const summary2 = el("div", { class: "debug-summary" });
     summary2.append(
@@ -1281,6 +1291,162 @@ function renderDebugTrace(data) {
     }
     debugResult.append(summary2);
   }
+}
+
+/* ------------------------------------------------- review & correct form */
+
+const _HEADER_FIELD_LABELS = [
+  ["entity", "Entity"], ["surgery_date", "Surgery date"], ["rep", "Rep"],
+  ["rep_code", "Rep code"], ["surgeon", "Surgeon"], ["hospital", "Hospital"],
+  ["po_number", "PO number"], ["freight", "Freight"], ["grand_total", "Grand total"],
+];
+const _LINE_FIELD_LABELS = [
+  ["ref", "REF"], ["description", "Description"], ["size", "Size"], ["lot", "Lot"],
+  ["qty", "Qty"], ["mfg_date", "Mfg date"], ["expiry_date", "Expiry date"],
+  ["unit_price", "Unit price"], ["line_total", "Line total"],
+];
+
+/** value -> the string an <input> should show */
+function _inputVal(v) { return v == null ? "" : String(v); }
+
+/** One labeled, editable field with a confidence dot. */
+function _reviewField(scope, field, label, value, conf, lineId) {
+  const v = _inputVal(value);
+  const attrs = { "data-scope": scope, "data-field": field, "data-orig-value": v };
+  if (lineId != null) attrs["data-line-id"] = lineId;
+  return el("label", { class: "review-field" }, [
+    el("span", { class: "review-field-label" }, [
+      el("span", { class: `conf-dot is-${conf || "low"}`, attrs: { "aria-hidden": "true" } }),
+      document.createTextNode(label),
+    ]),
+    el("input", {
+      class: "review-field-input", attrs: { type: "text", value: v, ...attrs },
+    }),
+  ]);
+}
+
+/** Builds the editable "review & correct" panel from a /debug/trace response. */
+function renderDebugReviewForm(data) {
+  const result = data.result || {};
+  const header = result.header || {};
+  const lines = result.lines || [];
+  const confidence = result.confidence || { header: {}, lines: {} };
+
+  const section = el("section", { class: "debug-review", attrs: { "data-ticket-id": data.ticket_id } });
+
+  const headerRow = el("div", { class: "debug-review-head" }, [
+    el("h3", { text: "Review & correct" }),
+    el("div", { class: "debug-review-actions" }, [
+      el("button", { class: "btn btn-secondary", text: "Confirm all as correct",
+        attrs: { type: "button", id: "debug-confirm-all" } }),
+      el("button", { class: "btn btn-primary", text: "Save corrections",
+        attrs: { type: "button", id: "debug-save-corrections", disabled: "" } }),
+    ]),
+  ]);
+  section.append(headerRow);
+
+  const headerFieldset = el("fieldset", { class: "debug-review-header" }, [
+    el("legend", { text: "Ticket header" }),
+    el("div", { class: "review-field-grid" },
+      _HEADER_FIELD_LABELS.map(([field, label]) =>
+        _reviewField("header", field, label, header[field], (confidence.header || {})[field]))),
+  ]);
+  section.append(headerFieldset);
+
+  const linesWrap = el("div", { class: "debug-review-lines" });
+  lines.forEach((line, i) => {
+    const lineConf = (confidence.lines || {})[line.line_id] || {};
+    const card = el("div", { class: "debug-line-card" }, [
+      el("div", { class: "debug-line-card-head",
+        text: `Line ${i + 1} — ${line.ref || "(no REF resolved)"}` }),
+      el("div", { class: "review-field-grid" },
+        _LINE_FIELD_LABELS.map(([field, label]) =>
+          _reviewField("line", field, label, line[field], lineConf[field], line.line_id))),
+    ]);
+    if (line.wasted || (line.flags && line.flags.length)) {
+      const badges = el("div", { class: "debug-line-badges" });
+      if (line.wasted) badges.append(el("span", { class: "line-badge is-wasted", text: "WASTED" }));
+      for (const f of line.flags || []) badges.append(el("span", { class: "line-badge", text: f }));
+      card.append(badges);
+    }
+    linesWrap.append(card);
+  });
+  section.append(linesWrap);
+
+  const resultBox = el("div", { class: "debug-review-result", attrs: { id: "debug-review-result", hidden: "" } });
+  section.append(resultBox);
+
+  // Dirty tracking: any edited input enables "Save corrections".
+  const saveBtn = () => section.querySelector("#debug-save-corrections");
+  section.addEventListener("input", (e) => {
+    const input = e.target;
+    if (!input.matches(".review-field-input")) return;
+    input.classList.toggle("is-dirty", input.value !== input.dataset.origValue);
+    const anyDirty = !!section.querySelector(".review-field-input.is-dirty");
+    saveBtn().disabled = !anyDirty;
+  });
+
+  function _lockForm(message) {
+    section.querySelectorAll(".review-field-input, button").forEach((n) => { n.disabled = true; });
+    resultBox.hidden = false;
+    resultBox.textContent = message;
+  }
+
+  function _learnedSummary(resp) {
+    const l = resp.learned || {};
+    const parts = [];
+    if (l.price) parts.push(pluralize(l.price, "price"));
+    if (l.part_desc) parts.push(pluralize(l.part_desc, "part description"));
+    if (l.rep) parts.push(pluralize(l.rep, "rep"));
+    if (l.gtin_xref) parts.push(pluralize(l.gtin_xref, "barcode link"));
+    if (l.surgeon_map) parts.push(pluralize(l.surgeon_map, "surgeon link"));
+    const learnedText = parts.length ? `Learned: ${parts.join(", ")}.` : "Nothing new to learn.";
+    return `${learnedText} ${resp.audited_fields} field(s) audited. Ticket marked verified.`;
+  }
+
+  section.querySelector("#debug-confirm-all").addEventListener("click", async () => {
+    const btn = section.querySelector("#debug-confirm-all");
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Saving…";
+    try {
+      const resp = await api.debugCorrect(data.ticket_id, { confirm_all: true });
+      _lockForm(_learnedSummary(resp));
+      toast("success", "Confirmed", "Ticket marked verified.");
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = orig;
+      toast("error", "Couldn't save", errorDetail(err));
+    }
+  });
+
+  section.querySelector("#debug-save-corrections").addEventListener("click", async () => {
+    const btn = section.querySelector("#debug-save-corrections");
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = "Saving…";
+    const body = { header: {}, lines: {} };
+    section.querySelectorAll(".review-field-input.is-dirty").forEach((input) => {
+      if (input.dataset.scope === "header") {
+        body.header[input.dataset.field] = input.value;
+      } else {
+        const lid = input.dataset.lineId;
+        body.lines[lid] = body.lines[lid] || {};
+        body.lines[lid][input.dataset.field] = input.value;
+      }
+    });
+    try {
+      const resp = await api.debugCorrect(data.ticket_id, body);
+      _lockForm(_learnedSummary(resp));
+      toast("success", "Saved", "Corrections learned.");
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = orig;
+      toast("error", "Couldn't save", errorDetail(err));
+    }
+  });
+
+  return section;
 }
 
 /** Minimal HTML-escape for inline injection */

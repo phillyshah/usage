@@ -42,6 +42,28 @@ LINE_FIELDS = [
 ]
 
 
+def confidence_map_for_ticket(ticket_id: str) -> dict:
+    """Reshape field_extractions rows into {header:{field:conf}, lines:{line_id:{field:conf}}}.
+
+    Reuses the same rows sheets/write.py reads to colour workbook cells, so
+    on-screen confidence badges (e.g. the Debug Console review form) match
+    the exported .xlsx.
+    """
+    header: dict = {}
+    lines: dict = {}
+    for fe in db.field_extractions_for_ticket(ticket_id):
+        field = fe.get("field_name")
+        if not field or field == "raw_blob":
+            continue
+        c = (fe.get("confidence") or "low").lower()
+        line_id = fe.get("line_id")
+        if line_id:
+            lines.setdefault(line_id, {})[field] = c
+        else:
+            header[field] = c
+    return {"header": header, "lines": lines}
+
+
 def _is_wasted(vline: dict) -> bool:
     """A handwritten 'W'/'wasted' near a component marks it wasted (still a row)."""
     w = vline.get("wasted")
