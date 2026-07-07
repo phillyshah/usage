@@ -219,6 +219,19 @@ export const api = {
     return request("/debug/trace", { method: "POST", body: fd });
   },
 
+  /**
+   * POST /debug/trace/{ticket_id}/correct
+   * body: {confirm_all?, header?: {field:value}, lines?: {line_id: {field:value}}}
+   * -> {ticket_id, status:"verified", learned:{part_desc,rep,price,gtin_xref,surgeon_map}, audited_fields}
+   */
+  debugCorrect(ticketId, body) {
+    return request(`/debug/trace/${encodeURIComponent(ticketId)}/correct`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  },
+
   /** GET /version -> {version, changelog:[{version, date, notes:[]}]} */
   getVersion() {
     return request("/version", { method: "GET" });

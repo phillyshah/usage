@@ -586,6 +586,26 @@ async def debug_trace(file: UploadFile = File(...)):
         finally:
             _tracer.stop()
 
+        # Attach the authoritative post-persist values so the Debug Console can
+        # render an editable review form without reconstructing them from the
+        # per-line trace-step details (which lack line_id and header confidence).
+        from app.pipeline.assemble import TICKET_FIELDS, confidence_map_for_ticket
+
+        final_ticket = db.get_ticket(ticket_id) or {}
+        final_lines = db.lines_for_ticket(ticket_id)
+        final_lines.sort(key=lambda r: r.get("created_at") or "")
+        result["header"] = {f: final_ticket.get(f) for f in TICKET_FIELDS
+                            if f != "sum_line_totals"}
+        result["lines"] = [
+            {k: row.get(k) for k in (
+                "line_id", "ref", "gtin", "description", "size", "lot", "qty",
+                "mfg_date", "expiry_date", "unit_price", "line_total",
+                "part_type", "category", "wasted", "flags",
+            )}
+            for row in final_lines
+        ]
+        result["confidence"] = confidence_map_for_ticket(ticket_id)
+
         return {
             "ticket_id": ticket_id,
             "filename": filename,
@@ -596,6 +616,44 @@ async def debug_trace(file: UploadFile = File(...)):
 
     loop = get_event_loop()
     return await loop.run_in_executor(_executor, ctx.run, _run)
+
+
+@app.post("/debug/trace/{ticket_id}/correct")
+def debug_trace_correct(ticket_id: str, body: dict | None = Body(default=None)):
+    """Save Debug Console corrections/confirmations for one ticket created by
+    /debug/trace. Feeds the same learning stores + audit log as the .xlsx
+    corrections-upload path and marks the ticket verified.
+
+    body: {
+      "confirm_all": bool,                     # true = harvest current values as-is
+      "header": {field: value, ...},           # optional, ignored when confirm_all
+      "lines": {line_id: {field: value, ...}}  # optional, ignored when confirm_all
+    }
+    """
+    from app.learning.debug_correct import apply_debug_correction
+
+    if db.get_ticket(ticket_id) is None:
+        return JSONResponse({"error": "unknown ticket_id"}, status_code=404)
+
+    body = body or {}
+    confirm_all = bool(body.get("confirm_all"))
+    header_edits = None if confirm_all else (body.get("header") or {})
+    line_edits = None if confirm_all else (body.get("lines") or {})
+
+    result = apply_debug_correction(ticket_id, header_edits, line_edits)
+
+    try:
+        from app.metrics import bump_learning_watermarks
+        bump_learning_watermarks()
+    except Exception as exc:
+        log.warning("learning watermark bump skipped: %s", exc)
+
+    return {
+        "ticket_id": ticket_id,
+        "status": "verified",
+        "learned": result["learned"],
+        "audited_fields": result["audited_fields"],
+    }
 
 
 # ---------------------------------------------------------------------------
