@@ -630,7 +630,7 @@ class Database:
         row.setdefault("uploaded_at", _now_iso())
         return self.backend.insert("corrected_uploads", row)
 
-    def list_corrected_uploads(self, limit: int = 50) -> list[dict]:
+    def list_corrected_uploads(self, limit: int = 1000) -> list[dict]:
         """Retraining uploads, newest first (for the History tab)."""
         rows = self.backend.select("corrected_uploads")
         rows.sort(key=lambda r: r.get("uploaded_at") or "", reverse=True)

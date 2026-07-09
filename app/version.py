@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.10.0"
+VERSION = "2.11.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.11.0",
+        "date": "2026-07-08",
+        "notes": [
+            "History tab lists (past batches, correction uploads, daily "
+            "learning impact) are now grouped by month with the current "
+            "month expanded and older months collapsed — click a month to "
+            "see its activity, so long-running history stays easy to scan",
+            "'Retraining activity' and 'Work done' now show your full "
+            "history instead of only the last two weeks",
+        ],
+    },
     {
         "version": "2.10.0",
         "date": "2026-07-07",

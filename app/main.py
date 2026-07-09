@@ -457,7 +457,7 @@ def metrics_auto_resolve_daily(days: int = 14):
 
 
 @app.get("/metrics/learning")
-def metrics_learning(days: int = 14):
+def metrics_learning(days: int = 400):
     """Learning impact: cumulative totals + per-day corrections/facts learned."""
     from app.metrics import learning_timeline
 
@@ -526,7 +526,7 @@ def learning_health_status():
 
 
 @app.get("/corrections/uploads")
-def corrections_uploads(limit: int = 50):
+def corrections_uploads(limit: int = 1000):
     """List the retraining (corrected-sheet) uploads, newest first."""
     out = []
     for r in db.list_corrected_uploads(limit):

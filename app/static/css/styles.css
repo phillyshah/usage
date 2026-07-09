@@ -380,6 +380,31 @@ a { color: var(--teal-600); }
 .batch-date { font-weight: 600; }
 .batch-sub { color: var(--ink-500); font-size: .85rem; }
 
+/* Month-grouped History lists (batches, retraining activity) */
+.month-group {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+  margin-top: var(--s-2);
+}
+.month-group:first-of-type { margin-top: var(--s-4); }
+.month-summary {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-4); cursor: pointer; list-style: none; user-select: none;
+}
+.month-summary::-webkit-details-marker { display: none; }
+.month-summary:hover { background: var(--bg); }
+.month-summary-label { font-weight: 600; color: var(--ink-900); }
+.month-summary-count { color: var(--ink-500); font-size: .82rem; flex: 1; }
+.month-summary-chevron {
+  flex-shrink: 0; color: var(--ink-300); font-size: 0.75rem; transition: transform 0.15s;
+}
+.month-group[open] .month-summary-chevron { transform: rotate(90deg); }
+.month-group-body {
+  padding: 0 var(--s-4) var(--s-4);
+  margin-top: 0;
+}
+
 .empty-state {
   text-align: center; padding: var(--s-6); color: var(--ink-500);
   border: 1px dashed var(--line); border-radius: var(--r-md); background: var(--bg);
