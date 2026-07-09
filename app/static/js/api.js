@@ -176,7 +176,7 @@ export const api = {
    *             facts_learned:{prices, part_descriptions, reps, gtin_links, surgeon_links}}]}
    *     (daily newest-first)
    */
-  learningMetrics(days = 14) {
+  learningMetrics(days = 400) {
     return request(`/metrics/learning?days=${encodeURIComponent(days)}`, {
       method: "GET",
     });
@@ -186,7 +186,7 @@ export const api = {
    * GET /corrections/uploads?limit=N
    * -> [{uploaded_at, sheets_processed, tickets_matched, tickets_unknown, status}]
    */
-  correctionsUploads(limit = 50) {
+  correctionsUploads(limit = 1000) {
     return request(`/corrections/uploads?limit=${encodeURIComponent(limit)}`, {
       method: "GET",
     });

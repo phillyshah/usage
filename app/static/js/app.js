@@ -665,7 +665,7 @@ function renderBatches(batches) {
   // newest first if run_date is comparable
   const sorted = batches.slice().sort((a, b) =>
     String(b.run_date || "").localeCompare(String(a.run_date || "")));
-  batchesList.replaceChildren(...sorted.map((b) => {
+  renderMonthGroups(batchesList, sorted, (b) => b.run_date, (b) => {
     const row = el("div", { class: "batch-row" }, [
       el("div", { class: "batch-meta" }, [
         el("div", { class: "batch-date", text: friendlyDate(b.run_date) || "Batch" }),
@@ -680,7 +680,7 @@ function renderBatches(batches) {
     });
     row.append(link);
     return row;
-  }));
+  });
 }
 
 function friendlyDate(raw) {
@@ -688,6 +688,61 @@ function friendlyDate(raw) {
 }
 function humanStatus(s) {
   return String(s).replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/* ------------------------------------------------- month-grouped lists */
+/**
+ * As History lists grow, a flat feed gets long to scroll. These group
+ * already-sorted (newest-first) items into collapsible <details> sections
+ * by month, one per History-tab list (batches, retraining uploads, daily
+ * learning impact) — most recent month open by default, older months
+ * collapsed until clicked.
+ */
+
+/** "2026-07-02" or a full ISO timestamp -> "2026-07" (or "unknown"). */
+function _monthKey(dateStr) {
+  const m = String(dateStr || "").match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}` : "unknown";
+}
+
+/** "2026-07" -> "July 2026". */
+function _monthLabel(key) {
+  if (key === "unknown") return "Undated";
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
+}
+
+/**
+ * Groups `items` (already sorted newest-first) by month and renders one
+ * collapsible section per month into `container`. `dateOf(item)` returns
+ * the item's date string; `buildRow(item)` returns the row element for one
+ * item (the caller's existing per-item rendering, unchanged).
+ */
+function renderMonthGroups(container, items, dateOf, buildRow) {
+  const groups = new Map();   // monthKey -> {label, nodes}
+  for (const item of items) {
+    const key = _monthKey(dateOf(item));
+    if (!groups.has(key)) groups.set(key, { label: _monthLabel(key), nodes: [] });
+    groups.get(key).nodes.push(buildRow(item));
+  }
+
+  const sections = [];
+  let first = true;
+  for (const { label, nodes } of groups.values()) {
+    const details = document.createElement("details");
+    details.className = "month-group";
+    if (first) { details.open = true; first = false; }
+
+    const summary = el("summary", { class: "month-summary" }, [
+      el("span", { class: "month-summary-label", text: label }),
+      el("span", { class: "month-summary-count", text: pluralize(nodes.length, "item") }),
+      el("span", { class: "month-summary-chevron", attrs: { "aria-hidden": "true" }, text: "▸" }),
+    ]);
+    const body = el("div", { class: "batches month-group-body" }, nodes);
+    details.append(summary, body);
+    sections.push(details);
+  }
+  container.replaceChildren(...sections);
 }
 
 $("#batches-refresh").addEventListener("click", loadBatches);
@@ -943,7 +998,7 @@ async function loadLearning() {
   learningDaily.replaceChildren(el("p", { class: "muted-note", text: "Loading…" }));
   let data;
   try {
-    data = await api.learningMetrics(14);
+    data = await api.learningMetrics();
   } catch (err) {
     learningTotals.replaceChildren(
       el("div", { class: "empty-state" }, [
@@ -974,31 +1029,33 @@ async function loadLearning() {
       ]));
   }
 
-  // 3b — per-day learning impact (skip all-zero days).
+  // 3b — per-day learning impact (skip all-zero days), grouped by month.
   const days = Array.isArray(data && data.daily) ? data.daily : [];
-  const rows = [];
-  for (const d of days) {
-    const corrections = num(d, "corrections_made");
-    const blanks = num(d, "blanks_filled");
-    const fixed = num(d, "low_conf_fixed");
+  const activeDays = days.filter((d) => {
     const facts = factsSummary(d.facts_learned);
-    if (corrections === 0 && blanks === 0 && fixed === 0 && !facts) continue;
-    const sub = `${pluralize(corrections, "correction")} · ${blanks} blanks filled · ${fixed} guesses fixed`;
-    const meta = el("div", { class: "batch-meta" }, [
-      el("div", { class: "batch-date", text: friendlyDate(d.date) || "Day" }),
-      el("div", { class: "batch-sub", text: sub }),
-    ]);
-    if (facts) meta.append(el("div", { class: "batch-sub", text: facts }));
-    rows.push(el("div", { class: "batch-row" }, [meta]));
-  }
-  if (rows.length === 0) {
+    return !(num(d, "corrections_made") === 0 && num(d, "blanks_filled") === 0
+      && num(d, "low_conf_fixed") === 0 && !facts);
+  });
+  if (activeDays.length === 0) {
     learningDaily.replaceChildren(
       el("div", { class: "empty-state" }, [
         el("strong", { text: "No learning activity yet" }),
         el("span", { text: "Once you send corrections, the daily impact shows here." }),
       ]));
   } else {
-    learningDaily.replaceChildren(...rows);
+    renderMonthGroups(learningDaily, activeDays, (d) => d.date, (d) => {
+      const corrections = num(d, "corrections_made");
+      const blanks = num(d, "blanks_filled");
+      const fixed = num(d, "low_conf_fixed");
+      const facts = factsSummary(d.facts_learned);
+      const sub = `${pluralize(corrections, "correction")} · ${blanks} blanks filled · ${fixed} guesses fixed`;
+      const meta = el("div", { class: "batch-meta" }, [
+        el("div", { class: "batch-date", text: friendlyDate(d.date) || "Day" }),
+        el("div", { class: "batch-sub", text: sub }),
+      ]);
+      if (facts) meta.append(el("div", { class: "batch-sub", text: facts }));
+      return el("div", { class: "batch-row" }, [meta]);
+    });
   }
 }
 
@@ -1024,7 +1081,7 @@ async function loadUploads() {
       ]));
     return;
   }
-  uploadsList.replaceChildren(...uploads.map((u) => {
+  renderMonthGroups(uploadsList, uploads, (u) => u.uploaded_at, (u) => {
     const sheets = num(u, "sheets_processed");
     const matched = num(u, "tickets_matched");
     const sub = `${pluralize(sheets, "file")} · ${pluralize(matched, "ticket")} matched` +
@@ -1035,7 +1092,7 @@ async function loadUploads() {
         el("div", { class: "batch-sub", text: sub }),
       ]),
     ]);
-  }));
+  });
 }
 
 /* ===================================================================== *
