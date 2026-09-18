@@ -11,8 +11,8 @@ from app.sheets.write import OUTPUT_CONTRACT_COLUMNS, write_review_workbook
 # The deliverable contract is now exactly columns A..M (through Expiry Date).
 # Everything that used to follow lives on the Line Items sheet, not Usage.
 EXPECTED_CONTRACT = [
-    "Source Image Filename", "Reload Code", "Surgeon", "DistCode", "Date", "Month",
-    "Year", "Hospital", "Quantity", "Price", "Lot Number", "Ref Number",
+    "Source Image Filename", "Reload Code", "Surgeon", "Inits", "DistCode", "Date",
+    "Month", "Year", "Hospital", "Quantity", "Price", "Lot Number", "Ref Number",
     "Expiry Date",
 ]
 
@@ -61,13 +61,15 @@ def test_usage_row_values_and_joins():
     assert wb.sheetnames == ["Usage", "Tickets", "Line Items", "Raw Extraction", "Legend"]
     ws = wb["Usage"]
     headers = [c.value for c in ws[1]]
-    assert headers[:13] == EXPECTED_CONTRACT
-    assert headers[13] == "Notes"
+    assert headers[:14] == EXPECTED_CONTRACT
+    assert headers[14] == "Notes"
 
     row = {h: ws.cell(row=2, column=i + 1).value for i, h in enumerate(headers)}
     assert row["Source Image Filename"] == "MO083596"   # extension stripped
     assert row["Reload Code"] is None                    # not used
     assert row["Surgeon"] == "Woodworth"
+    # EXTRACT_PATIENT_INITIALS is off by default, so no patient data was read.
+    assert row["Inits"] is None
     assert row["DistCode"] == "GR-ME-001"
     assert row["Date"] == "06/01/2026"                   # MM/DD/YYYY
     assert row["Month"] == 6 and row["Year"] == 2026     # numeric

@@ -20,6 +20,7 @@ _TICKET_HEADERS = {
     "Sales Rep / Distributor": "rep",
     "Rep/Distributor Code": "rep_code",
     "Surgeon": "surgeon",
+    "Inits": "patient_initials",
     "Hospital": "hospital",
     "PO Number": "po_number",
     "Freight/Delivery Fee": "freight",

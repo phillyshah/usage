@@ -3,7 +3,9 @@
 Ingest (`ingest_image`) is the PHI gate path used by POST /images:
     raw bytes (in memory) -> preprocess -> detect template -> REDACT
       -> if not located: ticket=manual_queue, store NOTHING, return
-      -> else: store ONLY the redacted image, ticket=pending_review
+      -> else: (optional, flag-gated) read patient initials from the pre-mask
+               image in memory, then store ONLY the redacted image,
+               ticket=pending_review
 
 Batch processing (`run_batch`) is used by POST /batches/run and the scheduler:
     for each pending ticket -> load redacted image -> decode barcodes
@@ -17,7 +19,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import db
-from app.pipeline import assemble, barcode, preprocess, vision
+from app.pipeline import assemble, barcode, patient, preprocess, vision
 from app.pipeline.redact import redact_patient_region
 from app.pipeline.template import detect_template, geometry_for
 from app.storage import REDACTED_IMAGES, get_object, put_object, split_ref
@@ -95,6 +97,13 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
                  ticket["ticket_id"], filename)
         return {"ticket_id": ticket["ticket_id"], "status": "manual_queue"}
 
+    # The redaction gate has passed, so we know the patient region was located
+    # on a known template. ONLY now — and only when the flag is on — do we read
+    # the two patient initials off the still-in-memory pre-mask image. A ticket
+    # that failed either check above has already returned, having sent its image
+    # nowhere. What gets stored below is still the redacted image.
+    initials = patient.extract_initials(img, template)
+
     # Store ONLY the redacted image. If the store fails, flip the ticket to
     # manual_queue (rather than leave a pending ticket pointing at nothing) and
     # let the caller report the failure.
@@ -103,6 +112,8 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
         "entity": template,
         "source_filename": filename or None,
         "status": "pending_review",
+        "patient_initials": initials["value"],
+        "patient_initials_conf": initials["confidence"],
     })
     try:
         ref = put_object(REDACTED_IMAGES, f"{ticket['ticket_id']}.jpg",

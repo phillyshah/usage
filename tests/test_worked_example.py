@@ -108,8 +108,8 @@ def test_usage_sheet_has_contract_columns_and_joined_values():
     ws = wb["Usage"]
     headers = [c.value for c in ws[1]]
     # The deliverable contract is now columns A..M (through Expiry Date).
-    assert headers[:13] == OUTPUT_CONTRACT_COLUMNS
-    assert headers[13] == "Notes"
+    assert headers[:14] == OUTPUT_CONTRACT_COLUMNS
+    assert headers[14] == "Notes"
 
     rows = list(ws.iter_rows(min_row=2, values_only=True))
     assert len(rows) == 6

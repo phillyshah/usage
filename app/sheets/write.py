@@ -2,9 +2,9 @@
 
 Sheets:
   * ``Usage``      — the flat, one-row-per-device-line deliverable the accountant
-                     works in: columns A..M (``Source Image Filename`` through
+                     works in: columns A..N (``Source Image Filename`` through
                      ``Expiry Date``), plus a trailing ``Notes`` review aid in
-                     column N. Columns beyond Expiry Date are intentionally not
+                     column O. Columns beyond Expiry Date are intentionally not
                      produced (device/surgeon attributes live on the other sheets).
   * ``Tickets``    — one row per ticket (header reconciliation + round-trip key).
   * ``Line Items`` — one row per device WITH stable Ticket ID / Line ID, the key
@@ -55,6 +55,7 @@ USAGE_COLUMNS = [
     ("Source Image Filename", "file"),
     ("Reload Code", "blank"),
     ("Surgeon", "read:surgeon"),
+    ("Inits", "read:patient_initials"),
     ("DistCode", "read:rep_code"),
     ("Date", "date"),
     ("Month", "month"),
@@ -68,9 +69,9 @@ USAGE_COLUMNS = [
     ("Notes", "notes"),  # column N: review aid (flags/WASTED); not part of the contract
 ]
 
-# The deliverable contract is columns A..M (through Expiry Date); everything past
-# that was dropped per the accounting requirement. Notes (column N) is a review aid.
-OUTPUT_CONTRACT_COLUMNS = [h for h, _ in USAGE_COLUMNS[:13]]
+# The deliverable contract is columns A..N (through Expiry Date); everything past
+# that was dropped per the accounting requirement. Notes (column O) is a review aid.
+OUTPUT_CONTRACT_COLUMNS = [h for h, _ in USAGE_COLUMNS[:14]]
 
 TICKET_COLUMNS = [
     ("Ticket ID", None),
@@ -80,6 +81,7 @@ TICKET_COLUMNS = [
     ("Sales Rep / Distributor", "rep"),
     ("Rep/Distributor Code", "rep_code"),
     ("Surgeon", "surgeon"),
+    ("Inits", "patient_initials"),
     ("Hospital", "hospital"),
     ("PO Number", "po_number"),
     ("Freight/Delivery Fee", "freight"),

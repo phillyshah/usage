@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # prices run $50–$2,500, so 7500 leaves generous headroom.
     price_sanity_max: float = 7500
 
+    # --- Patient initials (PHI) ---
+    # OFF by default: with this false the app never reads patient data at all,
+    # which is the original LABEL_EXTRACTION_BUILD_SPEC §9 posture. Turning it on
+    # sends ONLY the cropped patient sticker to the vision API and stores ONLY
+    # the two initials — see app/pipeline/patient.py. Requires a HIPAA BAA on the
+    # Anthropic account.
+    extract_patient_initials: bool = False
+
     # --- Local / offline development ---
     # When true the app runs without Supabase or Anthropic: it uses an on-disk
     # store that mimics the Storage buckets and the deterministic-only pipeline.

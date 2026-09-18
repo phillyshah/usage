@@ -145,7 +145,14 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
             model=settings.anthropic_model,
             max_tokens=8000,
             thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
+            # SYSTEM_PROMPT is static and identical on every call (one per ticket,
+            # ~100/day) — cache it so repeat extractions reuse it at ~10% of the
+            # input-token cost instead of reprocessing it each time.
+            system=[{
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[
                 {
                     "role": "user",
@@ -175,7 +182,11 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         usage = getattr(resp, "usage", None)
         tokens_in = getattr(usage, "input_tokens", None)
         tokens_out = getattr(usage, "output_tokens", None)
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        cache_write = getattr(usage, "cache_creation_input_tokens", None)
         token_str = f" | {tokens_in}↑ {tokens_out}↓ tokens" if tokens_in is not None else ""
+        if cache_read:
+            token_str += f" ({cache_read} cached)"
         tracer.record(
             "vision_ai",
             f"Vision AI extraction ({settings.anthropic_model})",
@@ -185,6 +196,8 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
                 "model": settings.anthropic_model,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
+                "cache_read_input_tokens": cache_read,
+                "cache_creation_input_tokens": cache_write,
                 "header": result.get("header"),
                 "lines": result.get("lines"),
                 "freight": result.get("freight"),

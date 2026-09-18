@@ -23,6 +23,10 @@ TICKET_FIELDS = [
     "rep",
     "rep_code",
     "surgeon",
+    # Read at ingest from the pre-mask image (app/pipeline/patient.py), not from
+    # the redacted photo this module sees. Carried through so it gets a
+    # confidence row and lands in the workbook's Inits column.
+    "patient_initials",
     "hospital",
     "po_number",
     "freight",
@@ -508,6 +512,17 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             })
 
     db.create_line_items(line_rows)
+
+    # Patient initials were read at ingest (patient.py) from the pre-mask image
+    # and stored on the ticket row; this module only ever sees the redacted
+    # photo, so carry the stored value through rather than re-reading it. Left
+    # out of ticket_patch on purpose — update_ticket merges, so reprocessing a
+    # ticket keeps the initials instead of blanking them.
+    header_vals["patient_initials"] = ticket_row.get("patient_initials")
+    header_conf["patient_initials"] = (
+        (ticket_row.get("patient_initials_conf") or "low").lower()
+        if ticket_row.get("patient_initials") else "low"
+    )
 
     # ---- persist ticket header ----
     ticket_patch = {

@@ -35,6 +35,7 @@ _SCHEMA_PROBES = [
     ("reference_part_info", "part_number", "db/09_reference_masters.sql"),
     ("reference_surgeons", "surgeon_distcode", "db/09_reference_masters.sql"),
     ("masters_ingests", "id", "db/09_reference_masters.sql"),
+    ("tickets", "patient_initials", "db/10_patient_initials.sql"),
 ]
 
 _LOCAL_TABLES = [
