@@ -79,6 +79,18 @@ RETENTION_DAYS=14
 > alter table learning_surgeon_map enable row level security;
 > ```
 
+> **Upgrading to v2.12.0 from an existing install:** run this once in the
+> Supabase SQL Editor before deploying (additive; also in `db/10_patient_initials.sql`):
+> ```sql
+> alter table tickets add column if not exists patient_initials text;
+> alter table tickets add column if not exists patient_initials_conf text;
+> ```
+> These columns stay null unless you also set `EXTRACT_PATIENT_INITIALS=true`.
+> **That flag turns on PHI processing** — the patient sticker is cropped from the
+> pre-mask image and sent to the vision API to read the patient's two initials.
+> Only the initials are stored; the stored photo is still fully redacted. Confirm
+> the Anthropic account is under a HIPAA BAA before enabling it.
+
 **[you]** On the VPS, from the repo root:
 ```bash
 make deploy        # docker compose up -d --build

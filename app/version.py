@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.11.1"
+VERSION = "2.12.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.12.0",
+        "date": "2026-09-18",
+        "notes": [
+            "The usage spreadsheet has a new 'Inits' column, right after "
+            "Surgeon, holding the patient's initials",
+            "Initials are read from the patient sticker at upload time and only "
+            "the two letters are kept — the stored photo is still fully "
+            "redacted and the patient's name is never saved. Off unless "
+            "EXTRACT_PATIENT_INITIALS is switched on",
+        ],
+    },
     {
         "version": "2.11.1",
         "date": "2026-07-08",
