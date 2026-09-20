@@ -145,6 +145,10 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
             model=settings.anthropic_model,
             max_tokens=8000,
             thinking={"type": "adaptive"},
+            # Sonnet 5 defaults to "high" when effort is unset. "medium" is the
+            # cost/quality knob for the per-ticket read; watch the amber/red rate
+            # in History after changing it — that's the regression signal.
+            output_config={"effort": "medium"},
             # SYSTEM_PROMPT is static and identical on every call (one per ticket,
             # ~100/day) — cache it so repeat extractions reuse it at ~10% of the
             # input-token cost instead of reprocessing it each time.

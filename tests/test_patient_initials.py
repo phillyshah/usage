@@ -124,6 +124,18 @@ def test_only_the_patient_crop_is_sent_never_the_whole_ticket():
     assert sent.shape[:2] != (_H, _W)
 
 
+def test_initials_call_runs_at_low_effort():
+    """Two letters off a crop needs no deliberation. Without this, Sonnet 5
+    would default to "high" and we'd pay for reasoning we don't need."""
+    client = _fake_client()
+    a, b, c, d = _flag_on(client)
+    with a, b, c, d:
+        patient.extract_initials(_raw_image(), MAXX_ORTHO)
+
+    assert client.messages.create.call_args.kwargs["output_config"] == {
+        "effort": "low"}
+
+
 def test_stored_image_is_still_fully_redacted():
     batch = db.create_batch()
     stored: dict = {}
