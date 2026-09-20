@@ -118,6 +118,9 @@ def extract_initials(img, template: str) -> dict:
         resp = client.messages.create(
             model=settings.anthropic_model,
             max_tokens=1500,
+            # Reading two letters off a small crop needs no deliberation, and
+            # Sonnet 5 would otherwise default to "high".
+            output_config={"effort": "low"},
             system=SYSTEM_PROMPT,
             messages=[{
                 "role": "user",

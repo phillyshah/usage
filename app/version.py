@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.12.0"
+VERSION = "2.12.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.12.1",
+        "date": "2026-09-20",
+        "notes": [
+            "Tuned how hard the AI thinks on each read — less on the initials, "
+            "moderately less on the main ticket read — to cut the per-ticket "
+            "cost. Keep an eye on the amber/red rate in History; if it climbs, "
+            "this is the knob to turn back",
+        ],
+    },
     {
         "version": "2.12.0",
         "date": "2026-09-18",

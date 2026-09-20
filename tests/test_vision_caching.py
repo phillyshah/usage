@@ -38,6 +38,21 @@ def test_system_prompt_sent_as_cache_control_block():
     assert system[0]["cache_control"] == {"type": "ephemeral"}
 
 
+def test_extraction_runs_at_medium_effort():
+    """Sonnet 5 defaults to "high" when effort is unset; the per-ticket read is
+    pinned to "medium" deliberately. Locked in so it can't drift back silently."""
+    fake_client = MagicMock()
+    fake_client.messages.create.return_value = _fake_response()
+
+    with patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
+         patch.object(vision.settings, "offline_mode", False), \
+         patch("anthropic.Anthropic", return_value=fake_client):
+        vision.extract_handwritten(b"fake-jpeg-bytes")
+
+    assert fake_client.messages.create.call_args.kwargs["output_config"] == {
+        "effort": "medium"}
+
+
 def test_cache_stats_recorded_in_trace():
     from app.pipeline import tracer
 
