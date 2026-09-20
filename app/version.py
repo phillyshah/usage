@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.12.1"
+VERSION = "2.12.2"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.12.2",
+        "date": "2026-09-20",
+        "notes": [
+            "Fixed a privacy bug on Maxx Health tickets: the MH.../MO... file "
+            "naming wasn't recognised, so Health tickets were treated as "
+            "Orthopedics ones. The two layouts are mirror images, so the patient "
+            "sticker was left visible while a blank area was covered instead. "
+            "Health tickets are now identified correctly and masked in the right "
+            "place — re-upload any recent Health tickets to have them re-masked",
+        ],
+    },
     {
         "version": "2.12.1",
         "date": "2026-09-20",

@@ -15,6 +15,8 @@ scale to any photo resolution.
 """
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 
 MAXX_ORTHO = "Maxx Orthopedics"
@@ -76,12 +78,27 @@ def detect_template(img, filename: str | None = None) -> str:
     """Best-effort template detection.
 
     Order of evidence:
-      1. Filename hint (operators frequently name files by template).
-      2. (future) printed-logo anchor match via OpenCV template matching.
+      1. Entity prefix on the filename (the production naming convention).
+      2. Entity word anywhere in the filename (descriptively named files).
+      3. (future) printed-logo anchor match via OpenCV template matching.
     Returns one of MAXX_ORTHO / MAXX_HEALTH / UNKNOWN. UNKNOWN must NOT be
     treated as redactable — callers route it to the manual queue.
+
+    Getting this wrong is a PHI problem, not just an accuracy one: the two
+    layouts are mirror images, so a Health ticket read as Orthopedics masks the
+    empty right-hand side and leaves the patient sticker in full view.
     """
-    name = (filename or "").lower()
+    name = os.path.basename(filename or "").lower()
+
+    # Tickets are named by entity prefix + ticket number ("MH17469.jpg",
+    # "MO083596.jpg"), and each page of a multi-page PDF keeps it ("MH17469-p2").
+    # Anchored at the start and requiring a digit, so an unrelated name like
+    # "monday-scans.jpg" can't match. basename() first, so a directory such as
+    # /home/mona/ can't either.
+    prefix = re.match(r"m([ho])\d", name)
+    if prefix:
+        return MAXX_HEALTH if prefix.group(1) == "h" else MAXX_ORTHO
+
     if "health" in name:
         return MAXX_HEALTH
     if "ortho" in name or "orthopedic" in name:
