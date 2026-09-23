@@ -1,5 +1,8 @@
 # Usage project — Claude notes
 
+**Read `docs/WORK_LOG.md` first** — current production state, decisions not worth
+re-litigating, and open threads.
+
 ## VPS deploy
 - **Host:** `root@srv1373951` / IP `72.62.174.193`
 - **Repo path:** `/root/usage`
@@ -16,6 +19,11 @@
 ## Critical standing rules
 - **Never commit real ticket photos** — .gitignore blocks *.jpeg, MH*.jpg, MO*.jpg, tests/fixtures/real/
 - **PHI gate:** patient region masked before any storage; failure routes to manual queue
+- **One deliberate exception:** `EXTRACT_PATIENT_INITIALS` (currently **on** in prod)
+  reads the patient's two initials from the pre-mask image at ingest —
+  `app/pipeline/patient.py` only. It sends just the sticker crop, keeps only two
+  letters, and the stored image is still fully redacted. Keep it that narrow; see
+  `docs/WORK_LOG.md` before changing anything in that path.
 - **Anthropic account must run under a HIPAA BAA**
 - **Learning tables** (`learning_price`, `learning_part_desc`, `learning_rep_map`, `learning_gtin_xref`, `learning_surgeon_map`, `corrections_audit`, `corrected_uploads`) — flag explicitly before any work that could risk these
 
