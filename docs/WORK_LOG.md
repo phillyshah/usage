@@ -17,7 +17,7 @@ Last updated: 2026-09-23.
 | | |
 |---|---|
 | Version in `main` | **2.12.2** (PR #38 merged) |
-| Last version confirmed live | 2.12.1 — **2.12.2 deploy not yet verified** |
+| Deployed | **2.12.2** — confirmed live 2026-09-23 |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
@@ -42,10 +42,11 @@ masked on a coin flip. The honest fix routes those to manual queue, which costs
 review volume — deliberately left as a decision, not made unilaterally.
 
 **2. Already-stored Maxx Health images were never re-masked.**
-Anything ingested before 2.12.2 under an `MH*` filename has a *visible* patient
-sticker in the `redacted-images` bucket (see the 2.12.2 entry below). Bounded by
-the 14-day retention, so the window closes on its own; re-uploading those tickets
-re-masks them correctly sooner. No decision recorded either way.
+Anything ingested *before* the 2.12.2 deploy (2026-09-23) under an `MH*` filename
+has a *visible* patient sticker in the `redacted-images` bucket (see the 2.12.2
+entry below). MH tickets ingested from that deploy onward mask correctly. Bounded
+by the 14-day retention, so the last affected image ages out around **2026-10-07**;
+re-uploading those tickets re-masks them sooner. No decision recorded either way.
 
 **3. Confidence baseline after the effort drop.**
 Extraction moved from effort `high` (the unset default) to `medium` in 2.12.1.
@@ -54,10 +55,11 @@ which is a per-day series — so the pre-2026-09-20 days *are* the baseline and 
 be read retroactively. If it sags over a week of real tickets, put `vision.py`
 back to `high`; it's a one-line change.
 
-**4. Verify `Inits` on a real Maxx Health ticket.**
-Before 2.12.2 it would have come back blank on every MH ticket (wrong region
-cropped). Worth one Debug Console run against an MH ticket once 2.12.2 is
-deployed.
+**4. Verify `Inits` on a real Maxx Health ticket.** — *not yet done*
+Before 2.12.2 this came back blank on every MH ticket (wrong region cropped).
+2.12.2 is live, so it's unblocked: one Debug Console run against an MH ticket
+confirms both halves at once — the right region masked in the stored image, and
+the initials populated in column D.
 
 ---
 
