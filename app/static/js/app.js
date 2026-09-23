@@ -489,6 +489,92 @@ function renderCorrectionsResult(data) {
     "Corrections received", body);
 }
 
+/* ===================================================================== *
+ *  STEP 5 — Fill in missing prices
+ * ===================================================================== */
+const pricingResult = $("#pricing-result");
+const pricingPicker = createPicker({
+  dropzone: $("#pricing-dropzone"),
+  input: $("#pricing-input"),
+  listEl: $("#pricing-file-list"),
+  submitBtn: $("#pricing-submit"),
+  clearBtn: null,
+  multiple: false,
+  accept: isXlsx,
+});
+
+$("#pricing-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!pricingPicker.hasFiles()) return;
+  const btn = $("#pricing-submit");
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Filling in…";
+  try {
+    const data = await api.enrichPrices(pricingPicker.files[0]);
+    renderPricingResult(data);
+    toast("success", "Prices filled in", "Download the spreadsheet to see them.");
+    pricingPicker.clear();
+  } catch (err) {
+    renderNotice(pricingResult, "error", "We couldn't fill in the prices",
+      [el("p", { class: "notice-text", text:
+        "Nothing was changed, and any spreadsheet from an earlier run is still available." })],
+      errorDetail(err));
+    toast("error", "Couldn't fill in prices", "Please check the file and try again.");
+    btn.disabled = false;
+  } finally {
+    btn.textContent = original;
+  }
+});
+
+/* The unresolved breakdown, in the operator's words rather than the code's. */
+const PRICING_CAUSES = {
+  no_hospital: "no hospital on the row",
+  no_ref: "no part number on the row",
+  hospital_not_in_price_list: "hospital isn't in the price list",
+  hospital_ambiguous: "more than one hospital matched",
+  component_not_in_price_list: "component isn't in the price list",
+  no_supporting_evidence: "nothing to base a price on",
+  zero_without_direct_evidence: "would have priced at zero",
+};
+
+function renderPricingResult(data) {
+  const s = (data && data.summary) || {};
+  const body = [el("div", { class: "stat-grid" }, [
+    stat(num(s, "direct"), "from the price list"),
+    stat(num(s, "estimates"), "estimated"),
+    stat(num(s, "unresolved"), "still blank"),
+  ])];
+
+  if (num(s, "skipped_wasted") > 0) {
+    body.push(el("p", { class: "notice-text", text:
+      `${s.skipped_wasted} wasted component${s.skipped_wasted === 1 ? "" : "s"} were left alone — a wasted line's price is your call, not a lookup.` }));
+  }
+
+  const causes = (s && s.unresolved_causes) || {};
+  const listed = Object.keys(causes)
+    .map((k) => `${causes[k]} ${PRICING_CAUSES[k] || k}`)
+    .join(" · ");
+  if (listed) {
+    body.push(el("p", { class: "notice-text", text: `Still blank because: ${listed}.` }));
+  }
+
+  if (Array.isArray(s.ambiguous_hospitals) && s.ambiguous_hospitals.length) {
+    body.push(el("p", { class: "notice-text", text:
+      `Couldn't tell which price-list hospital these are: ${s.ambiguous_hospitals.join(", ")}.` }));
+  }
+
+  if (data && data.download_url) {
+    body.push(el("a", {
+      class: "btn btn-primary", href: data.download_url, download: "",
+      text: "Download the priced spreadsheet",
+    }));
+  }
+
+  renderNotice(pricingResult, num(s, "unresolved") > 0 ? "warn" : "success",
+    "Prices filled in", body);
+}
+
 function num(obj, key) { return obj && typeof obj[key] === "number" ? obj[key] : 0; }
 function stat(n, label) {
   return el("div", { class: "stat" }, [
@@ -601,11 +687,23 @@ wireRefTile({
   ])],
 });
 
+/* Hospital price list — full-replaces every tab; feeds step 5. */
+wireRefTile({
+  prefix: "pricelist", accept: isXlsx, label: "Hospital price list",
+  upload: (f) => api.uploadPriceList(f),
+  onSuccess: (d) => [el("div", { class: "stat-grid" }, [
+    stat(num(d, "tabs"), "tabs"),
+    stat(num(d, "hospitals"), "hospital columns"),
+    stat(num(d, "prices"), "prices"),
+  ])],
+});
+
 /* Freshness elements, one per tile. */
 const gtinStatus = $("#gtin-status");
 const partStatus = $("#part-status");
 const surgeonStatus = $("#surgeon-status");
 const referenceStatus = $("#reference-status");
+const priceListStatus = $("#pricelist-status");
 
 /**
  * Read the /reference/status payload (new shape) and populate every tile's
@@ -623,6 +721,8 @@ async function loadReferenceStatus() {
     renderFreshness(gtinStatus, gtin.rows, gtin.updated_at);
     renderFreshness(partStatus, part.rows, part.updated_at);
     renderFreshness(surgeonStatus, surgeon.rows, surgeon.updated_at);
+    const prices = m.prices || {};
+    renderFreshness(priceListStatus, prices.rows, prices.updated_at);
 
     const parts = Number(log.unique_parts || 0);
     const lots = Number(log.unique_lots || 0);
@@ -1195,7 +1295,8 @@ $("#start-over-btn").addEventListener("click", async () => {
   // Reset the UI back to step 1.
   uploadPicker.clear();
   correctionsPicker.clear();
-  for (const node of [uploadResult, runResult, correctionsResult]) {
+  pricingPicker.clear();
+  for (const node of [uploadResult, runResult, correctionsResult, pricingResult]) {
     if (node) { node.hidden = true; node.replaceChildren(); }
   }
   runProgress.hidden = true;

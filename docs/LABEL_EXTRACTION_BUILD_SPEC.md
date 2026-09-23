@@ -52,7 +52,9 @@ Current snapshot: **~1,682 unique REFs**, **~51,000 unique lot numbers** — the
 
 **What the log gives us:** `REF → Description (+ size)` (autofill stable fields, no reading); `Lot # → Expiry + Part No` (second independent lookup — recover a missing REF from a known lot, validate expiry); REF/LOT validation (not in log → flag).
 
-**What it does NOT give us:** pricing. There is no price catalog and there won't be — **pricing is account-based, and the account is the hospital.** Price is read from the ticket via the vision call, then cross-checked (§6).
+**What it does NOT give us:** pricing. Price is read from the ticket via the vision call, then cross-checked (§6).
+
+> **Superseded as of v2.13.0.** This section used to read "there is no price catalog and there won't be". There is now one — `reference_hospital_prices`, a per-hospital component price list uploaded as a fifth reference master. It does **not** replace reading the price off the ticket; it only fills the cells a *construct* price leaves blank, as an explicit step 5 the operator runs on a finished workbook. The underlying claim still holds and is in fact what the catalog is keyed on: **pricing is account-based, and the account is the hospital.**
 
 ---
 

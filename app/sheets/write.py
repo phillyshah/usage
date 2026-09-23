@@ -35,6 +35,11 @@ from app.pipeline.reference import resolve_surgeon
 AMBER = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
 RED = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
 YELLOW = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+# Step 5 (price enrichment) writes these. They are listed in the Legend at
+# generation time rather than appended during enrichment, so enrichment can keep
+# its guarantee that it changes nothing but blank Price cells.
+GREEN = PatternFill(start_color="39FF14", end_color="39FF14", fill_type="solid")
+ROSE = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
 HEADER_FILL = PatternFill(start_color="E8EEF1", end_color="E8EEF1", fill_type="solid")
 HEADER_FONT = Font(bold=True)
 
@@ -441,6 +446,8 @@ def _write_legend_sheet(ws) -> None:
         ("Amber", "Low-confidence guess — single source or a minor disagreement", "Eyeball it; fix if wrong", AMBER),
         ("Red", "Blank / unreadable — no confident read", "Fill it in", RED),
         ("Yellow", "Wasted component (price still counts toward the total)", "Confirm the WASTED note", YELLOW),
+        ("Neon green", "Price filled from the hospital price list (step 5)", "Nothing — it came straight from the list", GREEN),
+        ("Rose", "Estimated price (step 5) — inferred, not looked up", "Check it before relying on it", ROSE),
     ]
     for color, meaning, todo, fill in legend:
         ws.append([color, meaning, todo])

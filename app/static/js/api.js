@@ -241,4 +241,36 @@ export const api = {
   referenceStatus() {
     return request("/reference/status", { method: "GET" });
   },
+
+  /**
+   * POST /reference/prices (multipart, single file, field "file")
+   * -> 200 {tabs, prices, hospitals, per_tab}
+   */
+  uploadPriceList(file) {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request("/reference/prices", { method: "POST", body: fd });
+  },
+
+  /**
+   * POST /pricing/enrich (multipart, single file, field "file")
+   * -> 200 {run_id, status, summary, download_url}
+   * The enriched workbook is fetched separately via pricingSheetUrl(): this
+   * helper reads every response as text and can't carry a binary body.
+   */
+  enrichPrices(file) {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    return request("/pricing/enrich", { method: "POST", body: fd });
+  },
+
+  /** Relative URL for an enriched workbook download (used as an href). */
+  pricingSheetUrl(runId) {
+    return `/pricing/runs/${encodeURIComponent(runId)}/sheet`;
+  },
+
+  /** GET /pricing/latest -> {} | {run_id, created_at, summary, download_url} */
+  pricingLatest() {
+    return request("/pricing/latest", { method: "GET" });
+  },
 };

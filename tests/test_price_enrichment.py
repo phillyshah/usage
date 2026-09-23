@@ -1,0 +1,507 @@
+"""Step 5 — filling blank Price cells from the hospital price list.
+
+Covers the twelve named acceptance tests from the work instructions, plus the
+regressions that the real price-list workbook and the real part master turned
+up while building this:
+
+  * the ``***`` fill is NOT three characters (``UFCR***-GK`` is ``UFCRLA00-GK``),
+  * the component tiers must short-circuit or ``MTUUX`` poisons ``MTUUX***-GK``,
+  * the two tab layouts have different numbers of metadata columns,
+  * Excel writes ``800002`` as ``800002.0``,
+  * a formula that displays empty is not a blank cell,
+  * a wasted (yellow) Price cell can also be blank, and must stay yellow.
+"""
+import io
+
+import pytest
+from fastapi.testclient import TestClient
+from openpyxl import Workbook, load_workbook
+
+from app.db import db
+from app.main import app
+from app.pipeline.assemble import assemble_and_persist
+from app.pricing import match as mt
+from app.pricing import normalize as nz
+from app.pricing.enrich import EnrichmentError, enrich_workbook
+from app.pricing.ingest import parse_price_list
+from app.sheets.write import write_review_workbook
+
+client = TestClient(app)
+
+MH_TAB = "MH for MO"
+MO_TAB = "Summary Price List"
+
+
+# --------------------------------------------------------------------------
+# Fixtures / builders
+# --------------------------------------------------------------------------
+def _f(value, confidence="high"):
+    return {"value": value, "confidence": confidence}
+
+
+def _empty_label():
+    return {"gtin": None, "lot": None, "expiry": None, "mfg": None,
+            "serial": None, "raw": None, "decoded": False, "ref": None}
+
+
+def price_list_bytes(tabs: dict) -> bytes:
+    """tabs -> {tab: {"meta": [...], "hospitals": [...],
+                      "rows": [(item, [meta values...], {hospital: price})]}}
+
+    Row 1 is junk and row 2 is the header, mirroring the real workbook.
+    """
+    wb = Workbook()
+    wb.remove(wb.active)
+    for name, spec in tabs.items():
+        ws = wb.create_sheet(name)
+        ws.append([spec.get("banner", "PRICE LIST")])
+        ws.append(list(spec["meta"]) + list(spec["hospitals"]))
+        for item, meta, prices in spec["rows"]:
+            ws.append([item] + list(meta)
+                      + [prices.get(h) for h in spec["hospitals"]])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def seed_price_list(tabs: dict) -> None:
+    db.replace_hospital_prices(parse_price_list(price_list_bytes(tabs))["rows"])
+
+
+def seed_usage(rows: list[dict]) -> bytes:
+    """rows -> the real generated workbook, so the column contract can't drift.
+
+    Each row: {filename, entity, hospital, ref, price, wasted, description,
+    part_type, category}.
+
+    The surgeon and part masters are seeded from the rows because assemble drops
+    what they don't cover: an unknown REF leaves Ref Number blank, and an
+    unmatched surgeon leaves Hospital blank — the same two upstream holes that
+    make most real rows unpriceable.
+    """
+    db.replace_reference_surgeons([
+        {"surgeon_distcode": f"PRICERPR-{i}", "surgeon_last_name": "Pricer",
+         "dist_code": f"PR-{i}", "status": "Active", "surgeon_full_name": "P Pricer",
+         "hospital": r["hospital"], "region": "X", "distributor_rep": "R"}
+        for i, r in enumerate(rows) if r.get("hospital")
+    ])
+    db.replace_reference_part_info([
+        {"part_number": r["ref"],
+         "description": r.get("description", "TIBIAL BASE PLATE (TITAN)"),
+         "part_type": r.get("part_type", "Tibial"),
+         "category": r.get("category", "Knee")}
+        for r in rows if r.get("ref")
+    ])
+    batch = db.create_batch()
+    for i, r in enumerate(rows):
+        ticket = db.create_ticket({
+            "batch_id": batch["id"], "entity": r.get("entity"),
+            "source_filename": r["filename"], "surgeon": "Pricer",
+            "rep_code": f"PR-{i}", "hospital": r.get("hospital"),
+            "surgery_date": "2026-06-01", "status": "pending_review",
+        })
+        price = r.get("price")
+        vision = {
+            "header": {
+                "surgeon": _f("Pricer"), "rep_code": _f(f"PR-{i}"),
+                "hospital": _f(r["hospital"]) if r.get("hospital") else _f(None, "low"),
+                "surgery_date": _f("2026-06-01"),
+                "entity": _f(r["entity"]) if r.get("entity") else _f(None, "low"),
+            },
+            "lines": [{
+                "index": 0,
+                "ref": _f(r["ref"]) if r.get("ref") else _f(None, "low"),
+                "lot": _f(f"L{i}"), "qty": _f(1),
+                "unit_price": _f(price) if price is not None else _f(None, "low"),
+                "wasted": _f(bool(r.get("wasted"))),
+            }],
+            "freight": _f(None, "low"), "grand_total": _f(None, "low"),
+        }
+        assemble_and_persist(ticket, vision, [_empty_label()])
+    return write_review_workbook(batch["id"])
+
+
+def usage_prices(data: bytes) -> list[tuple]:
+    """[(row, value, fill_rgb)] for every Usage data row, in sheet order."""
+    ws = load_workbook(io.BytesIO(data))["Usage"]
+    headers = [c.value for c in ws[1]]
+    col = headers.index("Price") + 1
+    out = []
+    for r in range(2, ws.max_row + 1):
+        cell = ws.cell(row=r, column=col)
+        rgb = getattr(cell.fill.fgColor, "rgb", None)
+        out.append((r, cell.value, rgb))
+    return out
+
+
+@pytest.fixture(autouse=True)
+def _clean_price_list():
+    db.replace_hospital_prices([])
+    db.replace_reference_part_info([])
+    db.replace_reference_surgeons([])
+    yield
+
+
+# ==========================================================================
+# Acceptance tests 1-4 — hospital normalization and matching
+# ==========================================================================
+def test_at1_ctr_expands_to_center_midname():
+    """AT1: 'Seaside Surg Ctr Group' must equal 'Seaside Surgery Center Group'."""
+    assert (nz.normalize_hospital("Seaside Surg Ctr Group")
+            == nz.normalize_hospital("Seaside Surgery Center Group"))
+    m = mt.match_hospital("Seaside Surg Ctr Group", ["Seaside Surgery Center Group"])
+    assert m.method == "exact" and m.confident
+
+
+def test_at2_legal_suffix_and_extra_spaces_normalize():
+    """AT2: 'Acme Hospital, LLC' == 'Acme  Hospital' (suffix + whitespace)."""
+    assert (nz.normalize_hospital("Acme Hospital, LLC")
+            == nz.normalize_hospital("Acme  Hospital"))
+
+
+def test_at3_fuzzy_single_candidate_matches():
+    """AT3: one credible candidate at >=75% resolves."""
+    m = mt.match_hospital("AdventHealth Carrolwood", ["AdventHealth Carrollwood"])
+    assert m.matched and m.name == "AdventHealth Carrollwood"
+
+
+def test_at4_multiple_credible_candidates_are_ambiguous():
+    """AT4: two candidates that score alike resolve to nothing, not a coin flip."""
+    m = mt.match_hospital("Mercy Surgery Institute",
+                          ["Mercy Surgical Institute A", "Mercy Surgical Institute B"])
+    assert m.method == "ambiguous" and not m.matched
+
+
+def test_near_duplicate_is_not_ambiguous_when_one_clearly_wins():
+    """The Summary tab lists 'Advanced Surg Ctr of North County' AND
+    '... North County HIgh Demand'. Both clear 75%; calling that a tie would
+    throw away a match that is effectively exact."""
+    m = mt.match_hospital(
+        "Advanced Surgery Center of North County",
+        ["Advanced Surg Ctr of North County",
+         "Advanced Surg Ctr of North County HIgh Demand"])
+    assert m.name == "Advanced Surg Ctr of North County"
+
+
+def test_fuzzy_hospital_never_backs_a_green_price():
+    """A fuzzy hospital match prices the row, but as an estimate. Green says
+    'came straight from the list, don't check it' and fuzzy can't promise that."""
+    m = mt.match_hospital("AdventHealth Carrolwood", ["AdventHealth Carrollwood"])
+    assert m.matched and m.method == "fuzzy" and not m.confident
+
+
+def test_health_system_parenthetical_is_stripped():
+    assert (nz.normalize_hospital("Centerpoint Med Ctr (HCA)")
+            == nz.normalize_hospital("Centerpoint Medical Center"))
+
+
+# ==========================================================================
+# Acceptance test 9 + component matching
+# ==========================================================================
+def test_at9_cr_and_ps_never_match_on_description():
+    """AT9: a CR component and a PS component are different devices however
+    similar the rest of the text reads."""
+    catalog = {"MLPSX": "Tibial Articular Surface PS"}
+    m = mt.match_component(None, "Tibial Articular Surface CR", catalog)
+    assert not m.matched
+
+
+def test_wildcard_fill_is_not_fixed_at_three_characters():
+    """``UFCR***-GK`` stands for the real REF ``UFCRLA00-GK`` — a four-character
+    fill. A ``.{3}`` quantifier silently drops the whole family."""
+    pat = mt.compile_code_pattern("UFCR***-GK")
+    assert pat.match("UFCRLA00-GK")
+    assert mt.compile_code_pattern("ACLMR***-UK").match("ACLMRL100-UK")
+
+
+def test_wildcard_does_not_cross_k_and_gk_suffixes():
+    assert not mt.compile_code_pattern("MTUUX***-GK").match("MTUUX100-K")
+
+
+def test_lowercase_xxx_is_a_wildcard_and_uppercase_xx_is_literal():
+    """``311xxx`` is a code family; ``DAXX00D-F`` is a real part number."""
+    assert mt.compile_code_pattern("311xxx").match("311541")
+    assert not mt.compile_code_pattern("311xxx").match("314541")
+    assert mt.compile_code_pattern("DAXX00D-F") is None
+
+
+def test_tier_shortcircuit_prevents_the_mtuux_false_conflict():
+    """The bare code ``MTUUX`` is a prefix of ``MTUUX100-GK``, which the pattern
+    ``MTUUX***-GK`` also matches — at different prices. Unioning the tiers would
+    read that as a conflict and refuse to price the row."""
+    catalog = {"MTUUX***-GK": "TIBIAL BASE PLATE (TITAN)", "MTUUX": "TBP"}
+    m = mt.match_component("MTUUX100-GK", None, catalog)
+    assert m.tier == "wildcard" and m.codes == ("MTUUX***-GK",)
+    # and the bare code still wins for a REF the pattern doesn't cover
+    assert mt.match_component("MTUUX100-K", None, catalog).codes == ("MTUUX",)
+
+
+def test_prefix_tier_resolves_a_family_written_without_wildcards():
+    """'MO-MSFC' and 'ALCRX' are written as bare codes but are prefixes of the
+    real REFs ('MO-MSFC-46/MB', 'ALCRXA109-K')."""
+    catalog = {"MO-MSFC": "Femoral", "ALCRX": "All Poly Tibial CR"}
+    assert mt.match_component("MO-MSFC-46/MB", None, catalog).tier == "prefix"
+    assert mt.match_component("ALCRXA109-K", None, catalog).codes == ("ALCRX",)
+
+
+def test_generic_description_words_alone_cannot_carry_a_match():
+    catalog = {"ZZZ": "Femoral Component"}
+    assert not mt.match_component(None, "Tibial Component", catalog).matched
+
+
+# ==========================================================================
+# Ingest — the two real tab layouts and Excel's float coercion
+# ==========================================================================
+def test_parses_both_meta_column_layouts():
+    """'MH for MO' is Item/Description (2 meta columns); 'Summary Price List'
+    is Item/Class/Part Type (3). The first hospital column is detected."""
+    parsed = parse_price_list(price_list_bytes({
+        MH_TAB: {"meta": ["Item", "Description"], "hospitals": ["Blake Hospital"],
+                 "rows": [("ALCRX", ["All Poly Tibial CR"], {"Blake Hospital": 1000})]},
+        MO_TAB: {"meta": ["Item", "Class", "Part Type"],
+                 "hospitals": ["River Surgical Institute"],
+                 "rows": [("MTUUX***-GK", ["Knee", "Tibial"],
+                           {"River Surgical Institute": 925})]},
+    }))
+    rows = {(r["tab"], r["item_code"]): r for r in parsed["rows"]}
+    assert rows[(MH_TAB, "ALCRX")]["hospital"] == "Blake Hospital"
+    assert rows[(MH_TAB, "ALCRX")]["unit_price"] == 1000
+    assert rows[(MO_TAB, "MTUUX***-GK")]["unit_price"] == 925
+    assert parsed["tabs"][MO_TAB]["hospitals"] == 1
+
+
+def test_excel_float_item_code_normalizes_to_the_real_ref():
+    """Excel stores the numeric part number 800002 as 800002.0."""
+    parsed = parse_price_list(price_list_bytes({
+        MH_TAB: {"meta": ["Item", "Description"], "hospitals": ["Blake Hospital"],
+                 "rows": [(800002.0, ["Screw"], {"Blake Hospital": 75})]},
+    }))
+    assert parsed["rows"][0]["item_code"] == "800002"
+
+
+def test_duplicate_hospital_columns_agreeing_are_kept():
+    """'Surgcenter of Plano' appears twice on the real Summary tab. A
+    header-keyed parser would silently drop one."""
+    parsed = parse_price_list(price_list_bytes({
+        MO_TAB: {"meta": ["Item", "Class", "Part Type"],
+                 "hospitals": ["Surgcenter of Plano", "Surgcenter of Plano"],
+                 "rows": [("ALCRX", ["Knee", "Tibial"],
+                           {"Surgcenter of Plano": 400})]},
+    }))
+    assert len(parsed["rows"]) == 1
+    assert parsed["rows"][0]["unit_price"] == 400
+
+
+def test_a_workbook_with_no_prices_is_rejected():
+    with pytest.raises(ValueError):
+        parse_price_list(price_list_bytes({
+            MH_TAB: {"meta": ["Item", "Description"], "hospitals": ["Blake Hospital"],
+                     "rows": [("ALCRX", ["x"], {})]},
+        }))
+
+
+# ==========================================================================
+# Acceptance tests 5-8, 10-12 — the end-to-end run
+# ==========================================================================
+def _mh_list(prices=None):
+    return {MH_TAB: {"meta": ["Item", "Description"],
+                     "hospitals": ["Blake Hospital (HCA)"],
+                     "rows": [("MTUUX***-GK", ["TIBIAL BASE PLATE (TITAN)"],
+                               prices or {"Blake Hospital (HCA)": 925})]}}
+
+
+def test_at5_direct_match_fills_neon_green():
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "MH17469.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["direct"] == 1 and summary["estimates"] == 0
+    _, value, rgb = usage_prices(out)[0]
+    assert value == 925
+    assert rgb.endswith("39FF14")
+
+
+def test_at6_estimate_fills_rose():
+    """No price for this hospital, but the same REF is priced elsewhere in the
+    same workbook at the same hospital — rung 1 of the estimate ladder."""
+    seed_price_list(_mh_list({"Blake Hospital (HCA)": 925}))
+    data = seed_usage([
+        {"filename": "MH1.jpg", "entity": "Maxx Health",
+         "hospital": "Nowhere Surgical Partners", "ref": "ZZ-NOT-LISTED", "price": 640},
+        {"filename": "MH2.jpg", "entity": "Maxx Health",
+         "hospital": "Nowhere Surgical Partners", "ref": "ZZ-NOT-LISTED"},
+    ])
+    out, summary = enrich_workbook(data)
+    assert summary["estimates"] == 1 and summary["direct"] == 0
+    filled = [p for p in usage_prices(out) if p[1] == 640 and p[2]]
+    assert any(rgb.endswith("FFC7CE") for _, _, rgb in filled)
+
+
+def test_at7_an_existing_zero_price_is_left_alone():
+    """A zero is a real price of zero, not a hole."""
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK",
+                        "price": 0}])
+    out, summary = enrich_workbook(data)
+    assert summary["eligible"] == 0 and summary["direct"] == 0
+    assert usage_prices(out)[0][1] == 0
+
+
+def test_at8_a_wasted_yellow_cell_is_skipped_and_stays_yellow():
+    """write.py paints a wasted line's Price yellow even when the price is blank.
+    A wasted component's price is a business decision, not a lookup."""
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK",
+                        "wasted": True}])
+    out, summary = enrich_workbook(data)
+    assert summary["skipped_wasted"] == 1
+    assert summary["eligible"] == 0
+    _, value, rgb = usage_prices(out)[0]
+    assert value is None and rgb.endswith("FFFF00")
+
+
+def test_at10_and_at11_maxx_health_rows_only_ever_use_the_mh_tab():
+    """AT10/AT11: the Orthopedics tab prices the same component differently and
+    must not influence a Maxx Health row, directly or through an estimate."""
+    seed_price_list({
+        MH_TAB: {"meta": ["Item", "Description"], "hospitals": ["Blake Hospital (HCA)"],
+                 "rows": [("MTUUX***-GK", ["TIBIAL BASE PLATE (TITAN)"],
+                           {"Blake Hospital (HCA)": 925})]},
+        MO_TAB: {"meta": ["Item", "Class", "Part Type"],
+                 "hospitals": ["Blake Hospital (HCA)"],
+                 "rows": [("MTUUX***-GK", ["Knee", "Tibial"],
+                           {"Blake Hospital (HCA)": 5555})]},
+    })
+    data = seed_usage([{"filename": "MH17469.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["tabs"] == [MH_TAB]
+    assert usage_prices(out)[0][1] == 925
+
+
+def test_at12_a_failed_run_leaves_the_previous_output_in_place():
+    seed_price_list(_mh_list())
+    good = seed_usage([{"filename": "MH17469.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    ok = client.post("/pricing/enrich", files={"file": ("usage.xlsx", io.BytesIO(good),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert ok.status_code == 200
+    first_run = ok.json()["run_id"]
+
+    bad = client.post("/pricing/enrich", files={"file": ("junk.xlsx", io.BytesIO(b"not a workbook"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    assert bad.status_code == 400
+    assert bad.json()["last_good"]["run_id"] == first_run
+    assert client.get(f"/pricing/runs/{first_run}/sheet").status_code == 200
+    assert client.get("/pricing/latest").json()["run_id"] == first_run
+
+
+# ==========================================================================
+# Workbook-integrity guarantees
+# ==========================================================================
+def test_an_entity_the_tab_table_does_not_cover_fails_the_run():
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "ticket-001.jpg", "entity": "Some Other Distributor",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    with pytest.raises(EnrichmentError) as exc:
+        enrich_workbook(data)
+    assert exc.value.reason == "unconfigured_distributor"
+
+
+def test_a_blank_entity_falls_back_to_the_mh_mo_filename_prefix():
+    """write.py blanks Entity whenever the vision read was low-confidence, so
+    the filename convention has to be a real fallback, not a nicety."""
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "MH17469.jpg", "entity": None,
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    _, summary = enrich_workbook(data)
+    assert summary["tabs"] == [MH_TAB] and summary["direct"] == 1
+
+
+def test_formulas_are_never_treated_as_blank_and_survive_the_round_trip():
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb["Usage"]
+    col = [c.value for c in ws[1]].index("Price") + 1
+    ws.cell(row=2, column=col).value = '=IF(1=1,"","")'
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    out, summary = enrich_workbook(buf.getvalue())
+    assert summary["eligible"] == 0
+    assert usage_prices(out)[0][1] == '=IF(1=1,"","")'
+
+
+def test_a_workbook_with_charts_or_images_is_refused_rather_than_stripped():
+    """openpyxl cannot round-trip them, and silently destroying the operator's
+    work is worse than refusing to touch the file."""
+    wb = Workbook()
+    wb.active.title = "Usage"
+    wb.active.append(["Source Image Filename", "Hospital", "Price", "Ref Number"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    import zipfile
+    doctored = io.BytesIO()
+    with zipfile.ZipFile(buf, "r") as src, zipfile.ZipFile(doctored, "w") as dst:
+        for item in src.infolist():
+            dst.writestr(item, src.read(item.filename))
+        dst.writestr("xl/charts/chart1.xml", "<c:chartSpace/>")
+    with pytest.raises(EnrichmentError) as exc:
+        enrich_workbook(doctored.getvalue())
+    assert exc.value.reason == "unsupported_workbook_content"
+
+
+def test_a_workbook_without_a_usage_sheet_is_rejected():
+    wb = Workbook()
+    wb.active.title = "Something Else"
+    buf = io.BytesIO()
+    wb.save(buf)
+    with pytest.raises(EnrichmentError) as exc:
+        enrich_workbook(buf.getvalue())
+    assert exc.value.reason == "missing_usage_columns"
+
+
+def test_a_missing_tab_fails_the_run_rather_than_pricing_from_another():
+    db.replace_hospital_prices([])
+    data = seed_usage([{"filename": "MH17469.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    with pytest.raises(EnrichmentError) as exc:
+        enrich_workbook(data)
+    assert exc.value.reason == "missing_tab"
+
+
+def test_unresolved_rows_keep_their_red_fill_and_are_reported_by_cause():
+    """Most blanks on a real run are blank because the Hospital or Ref cell
+    upstream is itself blank — without the breakdown this looks like a bug."""
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
+                        "hospital": None, "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["unresolved"] == 1
+    assert summary["unresolved_causes"] == {"no_hospital": 1}
+    _, value, rgb = usage_prices(out)[0]
+    assert value is None and rgb.endswith("F4CCCC")
+
+
+def test_the_run_summary_always_adds_up():
+    seed_price_list(_mh_list())
+    data = seed_usage([
+        {"filename": "MH1.jpg", "entity": "Maxx Health",
+         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"},
+        {"filename": "MH2.jpg", "entity": "Maxx Health",
+         "hospital": "Blake Hospital", "ref": "ZZ-UNKNOWN"},
+        {"filename": "MH3.jpg", "entity": "Maxx Health",
+         "hospital": "Blake Hospital", "ref": "MTUUX200-GK", "price": 400},
+    ])
+    _, s = enrich_workbook(data)
+    assert s["eligible"] == s["direct"] + s["estimates"] + s["unresolved"]
+
+
+def test_the_price_list_appears_in_reference_status():
+    seed_price_list(_mh_list())
+    masters = client.get("/reference/status").json()["masters"]
+    assert masters["prices"]["rows"] >= 1
