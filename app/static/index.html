@@ -93,13 +93,14 @@
         </span>
       </summary>
       <div class="help-body">
-        <p>Follow the four steps below, top to bottom. You don't need any technical
+        <p>Follow the five steps below, top to bottom. You don't need any technical
            knowledge — each step tells you exactly what to do.</p>
         <ol class="help-steps">
           <li><strong>Upload today's tickets.</strong> Add the photos you took of today's tickets.</li>
           <li><strong>Extract the data.</strong> Press one button and let the tool read the labels for you.</li>
           <li><strong>Review the spreadsheet.</strong> Download it, fix any colored cells, and save.</li>
           <li><strong>Send back your corrections.</strong> Upload your saved spreadsheet so the tool can learn.</li>
+          <li><strong>Fill in missing prices.</strong> Upload the spreadsheet again to price the components a construct total left blank.</li>
         </ol>
       </div>
     </details>
@@ -247,6 +248,20 @@
               </span>
               <span class="legend-text"><strong>Red</strong> — blank. Please fill this in.</span>
             </li>
+            <li class="legend-item">
+              <span class="swatch swatch-green" aria-hidden="true"></span>
+              <span class="legend-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 12 10 18 20 6"/></svg>
+              </span>
+              <span class="legend-text"><strong>Green</strong> — price filled in from the hospital price list (step 5). Nothing to do.</span>
+            </li>
+            <li class="legend-item">
+              <span class="swatch swatch-rose" aria-hidden="true"></span>
+              <span class="legend-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/></svg>
+              </span>
+              <span class="legend-text"><strong>Rose</strong> — an estimated price (step 5). Check it before you rely on it.</span>
+            </li>
           </ul>
           <p class="legend-foot">When you're done, save the file and move on to step 4.</p>
         </div>
@@ -291,6 +306,52 @@
       </form>
 
       <div id="corrections-result" class="result-area" hidden></div>
+    </section>
+
+    <section class="card step-card" aria-labelledby="step5-title">
+      <div class="step-head">
+        <span class="step-number" aria-hidden="true">5</span>
+        <div>
+          <h2 class="step-title" id="step5-title">Fill in missing prices</h2>
+          <p class="step-help">Some components have no price because the ticket quoted one
+             construct total. Upload the spreadsheet and the tool looks each one up in the
+             hospital price list.</p>
+        </div>
+      </div>
+
+      <form id="pricing-form" class="step-body">
+        <label class="dropzone" id="pricing-dropzone" for="pricing-input" tabindex="0"
+               role="button" aria-describedby="pricing-hint">
+          <span class="dropzone-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="1" x2="12" y2="23" />
+              <path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6" />
+            </svg>
+          </span>
+          <span class="dropzone-title">Drag the spreadsheet here</span>
+          <span class="dropzone-sub" id="pricing-hint">or <span class="link-like">click to choose one .xlsx file</span></span>
+          <input id="pricing-input" class="visually-hidden" type="file"
+                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+        </label>
+
+        <ul class="file-list" id="pricing-file-list" aria-live="polite"></ul>
+
+        <p class="step-help">
+          <span class="swatch swatch-sm swatch-green" aria-hidden="true"></span>
+          Green means the price came straight from the price list.
+          <span class="swatch swatch-sm swatch-rose" aria-hidden="true"></span>
+          Rose means it is an estimate &mdash; check it.
+          Anything still red had nothing to go on.
+        </p>
+
+        <div class="step-actions">
+          <button type="submit" id="pricing-submit" class="btn btn-primary" disabled>
+            Fill in prices
+          </button>
+        </div>
+      </form>
+
+      <div id="pricing-result" class="result-area" hidden></div>
     </section>
 
     </div><!-- /#panel-tickets -->
@@ -411,6 +472,29 @@
               </div>
             </form>
             <div id="surgeon-result" class="result-area" hidden></div>
+          </div>
+
+          <!-- Hospital Price List -->
+          <div class="ref-tile ref-tile-wide" aria-labelledby="pricelist-title">
+            <h3 class="ref-tile-title" id="pricelist-title">Hospital Price List</h3>
+            <p class="ref-tile-help">Per-hospital component prices for step 5.
+               Uploading replaces every tab.</p>
+            <div id="pricelist-status" class="ref-fresh" aria-live="polite"></div>
+
+            <form id="pricelist-form" class="ref-tile-form">
+              <label class="dropzone dropzone-sm" id="pricelist-dropzone" for="pricelist-input" tabindex="0"
+                     role="button" aria-describedby="pricelist-hint">
+                <span class="dropzone-title">Drag the Hospital Price List here</span>
+                <span class="dropzone-sub" id="pricelist-hint">or <span class="link-like">choose one .xlsx file</span></span>
+                <input id="pricelist-input" class="visually-hidden" type="file"
+                       accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" />
+              </label>
+              <ul class="file-list" id="pricelist-file-list" aria-live="polite"></ul>
+              <div class="step-actions">
+                <button type="submit" id="pricelist-submit" class="btn btn-secondary" disabled>Update price list</button>
+              </div>
+            </form>
+            <div id="pricelist-result" class="result-area" hidden></div>
           </div>
 
           <!-- Expiry Log -->

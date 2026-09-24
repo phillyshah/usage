@@ -36,6 +36,8 @@ _SCHEMA_PROBES = [
     ("reference_surgeons", "surgeon_distcode", "db/09_reference_masters.sql"),
     ("masters_ingests", "id", "db/09_reference_masters.sql"),
     ("tickets", "patient_initials", "db/10_patient_initials.sql"),
+    ("reference_hospital_prices", "item_code", "db/11_hospital_prices.sql"),
+    ("pricing_runs", "run_id", "db/11_hospital_prices.sql"),
 ]
 
 _LOCAL_TABLES = [
@@ -45,6 +47,8 @@ _LOCAL_TABLES = [
     "reference_gtin",
     "reference_part_info",
     "reference_surgeons",
+    "reference_hospital_prices",
+    "pricing_runs",
     "log_ingests",
     "masters_ingests",
     "learning_part_desc",
@@ -136,6 +140,9 @@ class _LocalBackend:
         with self._lock:
             return self._read(table)
 
+    def select_paged(self, table: str, chunk: int = 1000) -> list[dict]:
+        return self.select(table)
+
     def table_stats(self, table: str, stamp_col: str = "ingested_at") -> dict:
         rows = self.select(table)
         stamps = [r.get(stamp_col) for r in rows if r.get(stamp_col)]
@@ -144,6 +151,10 @@ class _LocalBackend:
     def find_all(self, table: str, column: str, value: Any) -> list[dict]:
         with self._lock:
             return [r for r in self._read(table) if r.get(column) == value]
+
+    def find_all_paged(self, table: str, column: str, value: Any,
+                       chunk: int = 1000) -> list[dict]:
+        return self.find_all(table, column, value)
 
     def find_one(self, table: str, column: str, value: Any) -> dict | None:
         with self._lock:
@@ -231,6 +242,19 @@ class _SupabaseBackend:
     def select(self, table: str) -> list[dict]:
         return self.client.table(table).select("*").execute().data or []
 
+    def select_paged(self, table: str, chunk: int = 1000) -> list[dict]:
+        # select() stops at PostgREST's db-max-rows; this walks explicit ranges
+        # for tables that legitimately run past it (see find_all_paged).
+        out: list[dict] = []
+        start = 0
+        while True:
+            page = (self.client.table(table).select("*")
+                    .range(start, start + chunk - 1).execute().data) or []
+            out.extend(page)
+            if len(page) < chunk:
+                return out
+            start += chunk
+
     def table_stats(self, table: str, stamp_col: str = "ingested_at") -> dict:
         count_res = self.client.table(table).select("*", count="exact").limit(0).execute()
         n = count_res.count or 0
@@ -247,6 +271,23 @@ class _SupabaseBackend:
         # Predicate pushed to Postgres — never the 1000-row select() cap, and it
         # uses the table index instead of downloading rows to scan in Python.
         return self.client.table(table).select("*").eq(column, value).execute().data or []
+
+    def find_all_paged(self, table: str, column: str, value: Any,
+                       chunk: int = 1000) -> list[dict]:
+        # PostgREST caps a single response at db-max-rows (1000 on Supabase's
+        # defaults) whether or not the query is filtered, so a result set that
+        # can legitimately exceed that has to walk explicit ranges. The price
+        # list does: one tab of the real workbook is already 1,038 rows, and an
+        # unnoticed truncation there reads as "this hospital has no price".
+        out: list[dict] = []
+        start = 0
+        while True:
+            page = (self.client.table(table).select("*").eq(column, value)
+                    .range(start, start + chunk - 1).execute().data) or []
+            out.extend(page)
+            if len(page) < chunk:
+                return out
+            start += chunk
 
     def find_one(self, table: str, column: str, value: Any) -> dict | None:
         rows = (self.client.table(table).select("*").eq(column, value)
@@ -325,6 +366,37 @@ class Database:
             r.setdefault("ingested_at", _now_iso())
         self.backend.replace_all("reference_part_info", rows, key_col="part_number")
 
+    def replace_hospital_prices(self, rows: list[dict]) -> None:
+        """Full-replace the hospital price list (all tabs at once)."""
+        for r in rows:
+            r.setdefault("ingested_at", _now_iso())
+        self.backend.replace_all("reference_hospital_prices", rows,
+                                 key_col="item_code")
+
+    def hospital_prices_for_tab(self, tab: str) -> list[dict]:
+        """Every priced (item, hospital) row for one price-list tab."""
+        return self.backend.find_all_paged("reference_hospital_prices", "tab", tab)
+
+    def hospital_price_tabs(self) -> list[str]:
+        """Tab names present in the stored price list, in first-seen order."""
+        seen: dict[str, None] = {}
+        for r in self.backend.select_paged("reference_hospital_prices"):
+            seen.setdefault(r.get("tab") or "", None)
+        return [t for t in seen if t]
+
+    def create_pricing_run(self, row: dict) -> dict:
+        row.setdefault("created_at", _now_iso())
+        return self.backend.insert("pricing_runs", row)
+
+    def get_pricing_run(self, run_id: str) -> dict | None:
+        return self.backend.find_one("pricing_runs", "run_id", run_id)
+
+    def latest_successful_pricing_run(self) -> dict | None:
+        rows = [r for r in self.backend.select("pricing_runs")
+                if r.get("status") == "succeeded"]
+        rows.sort(key=lambda r: r.get("created_at") or "")
+        return rows[-1] if rows else None
+
     def replace_reference_surgeons(self, rows: list[dict]) -> None:
         for r in rows:
             r.setdefault("ingested_at", _now_iso())
@@ -372,6 +444,7 @@ class Database:
             "gtin":      self.backend.table_stats("reference_gtin"),
             "part_info": self.backend.table_stats("reference_part_info"),
             "surgeon":   self.backend.table_stats("reference_surgeons"),
+            "prices":    self.backend.table_stats("reference_hospital_prices"),
         }
 
     def sku_for_gtin(self, gtin: str) -> dict | None:

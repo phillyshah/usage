@@ -353,6 +353,9 @@ a { color: var(--teal-600); }
 .swatch-white { background: #ffffff; }
 .swatch-amber { background: var(--amber-cell); }
 .swatch-red   { background: var(--red-cell); }
+.swatch-green { background: #39FF14; }
+.swatch-rose  { background: #FFC7CE; }
+.swatch-sm    { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
 .legend-icon { display: inline-flex; color: var(--ink-500); flex: none; }
 .legend-text { color: var(--ink-700); }
 .legend-foot { margin-top: var(--s-4); color: var(--ink-500); font-size: .9rem; }
@@ -554,6 +557,9 @@ a { color: var(--teal-600); }
   display: grid; gap: var(--s-6); margin-top: var(--s-6);
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+/* The price list is the 5th tile in a 2-column grid; left alone it would sit
+   half-width on a row of its own. */
+.ref-tile-wide { grid-column: 1 / -1; }
 .ref-tile {
   display: flex; flex-direction: column; gap: var(--s-3);
   padding: var(--s-5);

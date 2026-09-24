@@ -5,9 +5,29 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.12.2"
+VERSION = "2.13.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.13.0",
+        "date": "2026-09-23",
+        "notes": [
+            "New step 5: upload the spreadsheet and the tool fills in the "
+            "prices that were left blank because the ticket quoted one "
+            "construct total instead of a price per component",
+            "Prices that came straight out of the hospital price list are "
+            "filled in neon green — nothing to check. Estimated prices are "
+            "rose — worth a look before you rely on them. Anything still red "
+            "had nothing to go on, and the summary tells you why",
+            "New 'Hospital Price List' tile under Reference Data. Uploading it "
+            "replaces every tab, and step 5 can't run until it's there",
+            "Wasted (yellow) components are left alone on purpose — what a "
+            "wasted component is worth is your call, not a lookup",
+            "A Maxx Health ticket is only ever priced from the Maxx Health tab, "
+            "and a Maxx Orthopedics ticket from the Orthopedics tab, even when "
+            "one spreadsheet holds both",
+        ],
+    },
     {
         "version": "2.12.2",
         "date": "2026-09-20",

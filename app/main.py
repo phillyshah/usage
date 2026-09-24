@@ -441,6 +441,127 @@ def reference_status():
 
 
 # ---------------------------------------------------------------------------
+# Step 5: hospital price list + usage-workbook price enrichment
+# ---------------------------------------------------------------------------
+@app.post("/reference/prices")
+async def reference_prices(file: UploadFile = File(...)):
+    """Full-replace the hospital price list (every tab at once), the reference
+    master step 5 prices against."""
+    from app.pricing.ingest import ingest_price_list
+    from app.storage import REFERENCE_LOGS, put_object
+
+    data = await file.read()
+    fname = file.filename or "Hospital_Price_List.xlsx"
+    try:
+        put_object(REFERENCE_LOGS, fname, data,
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as exc:
+        log.warning("price list storage upload failed (non-fatal): %s", exc)
+
+    loop = get_event_loop()
+    try:
+        return await loop.run_in_executor(_executor, ingest_price_list, data)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception as exc:
+        log.error("ingest_price_list failed: %s", traceback.format_exc())
+        return JSONResponse({"detail": _explain_db_error(exc)}, status_code=500)
+
+
+@app.post("/pricing/enrich")
+async def pricing_enrich(file: UploadFile = File(...)):
+    """Fill the blank Price cells of a generated usage workbook.
+
+    Returns JSON with a download link rather than the file itself: the SPA's
+    request() helper reads responses as text and cannot consume a binary body,
+    and a run id gives the audit row something to point at either way.
+    """
+    import uuid
+
+    from app.pricing.enrich import EnrichmentError, enrich_workbook
+    from app.storage import OUTPUT_SHEETS, put_object
+
+    data = await file.read()
+    fname = file.filename or "usage.xlsx"
+    run_id = uuid.uuid4().hex
+
+    def _fail(detail: str, reason: str, status: int):
+        try:
+            db.create_pricing_run({"run_id": run_id, "source_filename": fname,
+                                   "status": "failed", "failure_reason": reason})
+        except Exception as exc:
+            log.warning("could not record failed pricing run: %s", exc)
+        last = db.latest_successful_pricing_run()
+        return JSONResponse({
+            "detail": detail, "run_id": run_id, "status": "failed",
+            # A failed run publishes nothing, so the previous output is still
+            # downloadable — say so instead of leaving the operator stranded.
+            "last_good": ({"run_id": last["run_id"],
+                           "download_url": f"/pricing/runs/{last['run_id']}/sheet"}
+                          if last else None),
+        }, status_code=status)
+
+    loop = get_event_loop()
+    try:
+        out, summary = await loop.run_in_executor(_executor, enrich_workbook, data)
+    except EnrichmentError as exc:
+        return _fail(str(exc), exc.reason, 400)
+    except Exception as exc:
+        log.error("enrich_workbook failed: %s", traceback.format_exc())
+        return _fail(_explain_db_error(exc), "internal_error", 500)
+
+    try:
+        path = put_object(
+            OUTPUT_SHEETS, f"priced/{run_id}.xlsx", out,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as exc:
+        log.error("could not store enriched workbook: %s", traceback.format_exc())
+        return _fail(f"The prices were filled but the file could not be saved: {exc}",
+                     "storage_failure", 500)
+
+    db.create_pricing_run({
+        "run_id": run_id, "source_filename": fname, "output_path": path,
+        "status": "succeeded", "tabs": ", ".join(summary["tabs"]),
+        "eligible": summary["eligible"], "direct": summary["direct"],
+        "estimates": summary["estimates"], "unresolved": summary["unresolved"],
+        "skipped_wasted": summary["skipped_wasted"],
+        "zero_estimates": summary["zero_estimates"],
+        "summary": summary,
+    })
+    return {"run_id": run_id, "status": "succeeded", "summary": summary,
+            "download_url": f"/pricing/runs/{run_id}/sheet"}
+
+
+@app.get("/pricing/runs/{run_id}/sheet")
+def pricing_run_sheet(run_id: str):
+    from app.storage import get_object
+
+    run = db.get_pricing_run(run_id)
+    if not run or not run.get("output_path"):
+        return JSONResponse({"error": "sheet not found"}, status_code=404)
+    bucket, path = split_ref(run["output_path"])
+    data = get_object(bucket, path)
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":
+                 f'attachment; filename="priced_{run_id[:8]}.xlsx"'},
+    )
+
+
+@app.get("/pricing/latest")
+def pricing_latest():
+    """The last run that actually published, for the step-5 card on reload."""
+    run = db.latest_successful_pricing_run()
+    if not run:
+        return {}
+    return {"run_id": run["run_id"], "created_at": run.get("created_at"),
+            "source_filename": run.get("source_filename"),
+            "summary": run.get("summary"),
+            "download_url": f"/pricing/runs/{run['run_id']}/sheet"}
+
+
+# ---------------------------------------------------------------------------
 # Metrics
 # ---------------------------------------------------------------------------
 @app.get("/metrics/auto-resolve")
