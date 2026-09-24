@@ -18,7 +18,7 @@ from openpyxl import load_workbook
 
 from app.learning.ingest_reference import _cell_str, _is_xlsx
 from app.pipeline.assemble import _money
-from app.pricing.tabs import META_HEADERS
+from app.pricing.tabs import AGGREGATE_HEADERS, META_HEADERS
 
 log = logging.getLogger("pricing.ingest")
 
@@ -68,10 +68,19 @@ def parse_price_list(data: bytes) -> dict:
                 continue
             header = grid[hdr_i]
             start = _first_hospital_col(header)
-            hospitals = {
-                i: name for i in range(start, len(header))
-                if (name := (_cell_str(header[i]) or "").strip())
-            }
+            hospitals = {}
+            aggregates = []
+            for i in range(start, len(header)):
+                name = (_cell_str(header[i]) or "").strip()
+                if not name:
+                    continue
+                if name.lower() in AGGREGATE_HEADERS:
+                    aggregates.append(name)
+                    continue
+                hospitals[i] = name
+            if aggregates:
+                log.info("price list %r: skipped %d aggregate column(s): %s",
+                         tab, len(aggregates), ", ".join(aggregates))
             if not hospitals:
                 log.warning("price list tab %r has no hospital columns; skipped", tab)
                 continue

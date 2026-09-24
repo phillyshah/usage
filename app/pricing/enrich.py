@@ -277,7 +277,7 @@ def price_row(row: UsageRow, index: TabIndex, observations: list[UsageRow],
                         comp.codes)
 
     est = estimate_price(row, observations, index.prices, index.catalog,
-                         comp.codes)
+                         comp.codes, comp.fallbacks, hosp.name)
     if est.found:
         if est.value == 0 and not est.zero_flagged:
             summary.note("zero_without_direct_evidence")

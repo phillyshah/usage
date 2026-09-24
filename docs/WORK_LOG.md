@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-09-23.
+Last updated: 2026-09-24.
 
 ---
 
@@ -22,7 +22,7 @@ Last updated: 2026-09-23.
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
 | Schema | current through `db/10`. **`db/11_hospital_prices.sql` is NOT applied yet** — it must run before 2.13.0 deploys |
-| Tests | 252 passed, 2 skipped (219 + 33 for step 5) |
+| Tests | 261 passed, 2 skipped (219 + 42 for step 5) |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -48,15 +48,37 @@ entry below). MH tickets ingested from that deploy onward mask correctly. Bounde
 by the 14-day retention, so the last affected image ages out around **2026-10-07**;
 re-uploading those tickets re-masks them sooner. No decision recorded either way.
 
-**3. The price list covers about a quarter of the hospitals.**
-Measured before building step 5: of the 473 hospitals in `reference/surgeon_info.csv`,
-64 (14%) match a price-list hospital exactly after normalization, 58 (12%) match
-fuzzily, 7 are ambiguous, and **344 (73%) don't match at all**. That may be
-entirely expected — the list may only cover the accounts that use construct
-pricing — but it means most rows on a first real run will be estimates or
-unresolved, and that is not a bug. Sanity-check it against real ticket volume,
-not against the full master. The run summary's `unresolved_causes` breakdown
-exists precisely so this is legible rather than looking broken.
+**3. The two price-list tabs have opposite shapes, and neither is dense.**
+Measured against the real `Hospital_Price_List-2.xlsx` (2,459 rows after the
+aggregate column is dropped) and the 479 hospitals in `reference/surgeon_info.csv`:
+
+| | hospitals matched | of which green-eligible | grid density for those | expected result |
+|---|---|---|---|---|
+| **Summary Price List** (Maxx Orthopedics) | 123 of 479 | 55 exact | **9%** (median 6 of 73 items) | broad reach, mostly **rose** |
+| **MH for MO** (Maxx Health) | 23 of 479 | 10 exact | **78%** (median 55 of 66) | narrow reach, mostly **green** when it hits |
+
+An earlier note here said "~26% of hospitals, expect a lot of rose". That was
+measured against the two tabs pooled and it flattens the difference: it is right
+for Orthopedics and actively misleading for Health, where a matched hospital
+almost always yields a real looked-up price.
+
+The binding constraint on the Summary tab is **density, not matching**. Only 4 of
+176 accounts carry ≥20 prices and 18 carry ≤3; the tab reads as a set of
+negotiated exceptions per account rather than a price schedule. Matching cannot
+fix an account with four prices in it — a fuller schedule out of SAP is the only
+thing that would.
+
+One caveat before anyone acts on the 9%: it is a property of the *list*, not of
+real tickets. The list is concentrated — `UPUUX` is priced at 140 of 176
+hospitals, `MTUUX` 96, `MLUCX` 88, `UFCR` 74, and **8 items carry 47% of all
+priced cells**. If real tickets are dominated by those, the effective hit rate is
+far better than 9%. That is answerable from prod (`learning_price`, 2,410 facts,
+plus `line_items`) and is worth measuring before investing anywhere else.
+
+`HOSPITAL_ALIASES` is the only lever that raises *green* rather than rose. It is
+deliberately still a code dict; the run summary lists every unmatched and
+ambiguous hospital, so the loop is to run it and feed back the names that
+actually appear on tickets.
 
 **4. Confidence baseline after the effort drop.
 Extraction moved from effort `high` (the unset default) to `medium` in 2.12.1.
@@ -75,7 +97,54 @@ the initials populated in column D.
 
 ## Decisions worth not re-litigating
 
-### A fuzzy hospital match never produces a green price
+### Three defects that a green test suite could not have caught
+
+Found by running the shipped code against the real `Hospital_Price_List-2.xlsx`
+rather than against fixtures. Every one of them fails **silently** — no
+exception, no wrong number on screen, just a price that never appears. Fixture
+tests cannot find this class of bug, because the fixture encodes the same
+assumption the code does. Run new parsers against the real file.
+
+1. **Four-star wildcards never matched.** The tokenizer split on the literal
+   `***`, so `ACLM****-UK` and `RFPS****-GK` compiled to patterns requiring a
+   literal `*` in the REF. 17 price rows unreachable. Now matches *runs*
+   (`\*+`), which is what the catalogue actually writes.
+2. **`AVERAGE ITEM PRICE` was ingested as a hospital.** It is the Summary tab's
+   last column — a spreadsheet aggregate (the values give it away:
+   `2357.142857`). 74 rows, indistinguishable from a real account, and the
+   estimate ladder medians *across* hospitals, so a derived average was folded
+   back in as an independent observation: it moved the result for **37 of 58
+   components**. `AGGREGATE_HEADERS` in `tabs.py` now excludes those columns and
+   logs what it skipped.
+3. **The fuzzy tiebreak picked one sibling facility out of five** — see below.
+
+### The hospital matcher's margin rule was justified by a case that never reaches it
+
+`CREDIBLE_MARGIN` was introduced to stop `Advanced Surg Ctr of North County` and
+`… North County HIgh Demand` from tying. **That justification was wrong**: those
+two normalize identically, so the case resolves at the *exact* tier and never
+reaches the fuzzy matcher at all. The margin solved nothing and broke something:
+
+```
+'Baylor, Scott, & White'  ->  Baylor Scott & White Star     0.878  <- picked
+                              Baylor Scott & White Frisco   0.837
+                              ... three more siblings
+```
+
+A query naming **no facility** confidently picked one of five, on a margin that
+is an artifact of suffix length. Across the full master the margin bought exactly
+three matches: two correct Lehigh Valley typo cases and this one wrong Baylor.
+
+The matcher is now four short-circuiting tiers — exact, alias, **core**, fuzzy.
+`core` compares names with the generic words stripped and requires exactly one
+column to reduce to that form; it catches `Baylor Scott & White Medical Center -
+Sunnyvale` → `Baylor Scott & White Sunnyvale`, which fuzzy scored at only 0.79.
+Fuzzy keeps the margin but now also requires the leader to be either near-exact
+(≥0.95, the typo case) or picked out *by* the query — sharing a meaningful word
+the runner-up lacks. Net: Summary 107 → 123 matched, MH 21 → 23, and both generic
+Baylor names correctly ambiguous.
+
+### A fuzzy or core hospital match never produces a green price
 
 The work instructions treat a single ≥75% fuzzy candidate as a match, full stop.
 It is a match — but not a *certain* one: on the real data it produces
@@ -86,23 +155,46 @@ hospital (`HospitalMatch.confident`); a fuzzy hospital still prices the row, as 
 rose estimate. Fuzzy still earns its keep — it correctly catches
 `AdventHealth Carrolwood` → `AdventHealth Carrollwood`.
 
-### `***` is not three characters
+The `core` tier is excluded from green for its own reason: `meaningful_hospital`
+strips `hospital`, `surgery` and `center`, so `Boca Raton Hospital` and
+`Boca Raton Surg Ctr` collapse to the same core — plausibly two different
+accounts. Good enough to estimate from; not good enough to tell someone not to
+check.
 
-The obvious reading of `MTUUX***-GK` is "three of anything", and for that family
-it is. But the same catalogue writes `UFCR***-GK` for `UFCRLA00-GK` and
-`ACLMR***-UK` for `ACLMRL100-UK` — four-character fills. A `{3}` quantifier
-silently drops both families with no error anywhere. The wildcard is a `+` run,
-and intra-tier price agreement is what keeps it honest, not the quantifier.
+### `***` is neither three characters nor three glyphs
+
+Two separate mistakes, made one after the other, both of which failed silently:
+
+- The **fill** is not three characters. `UFCR***-GK` stands for `UFCRLA00-GK` and
+  `ACLMR***-UK` for `ACLMRL100-UK` — four-character fills. A `{3}` quantifier
+  matches neither. The fill is a `+` run, and intra-tier price agreement is what
+  keeps it honest, not the quantifier.
+- The **token** is not three glyphs either. `ACLM****-UK` and `RFPS****-GK` are
+  real catalogue codes, and splitting on a literal `***` leaves the fourth star
+  to be escaped into the pattern, which can then never match. The tokenizer
+  matches runs: `re.compile(r"(\*+|x{3,})")`.
+
 Lowercase `xxx` is a wildcard and uppercase `XX` is not, because `DAXX00D-F` is a
 real part number; no part number in the master contains an uppercase `XXX`.
 
-### Component tiers short-circuit; they are never unioned
+### Component tiers short-circuit for the price, but the losers are kept
 
 The bare code `MTUUX` is a prefix of `MTUUX100-GK`, which the pattern
-`MTUUX***-GK` also matches — and at Lancaster those two catalogue rows hold
-different prices. Unioning the tiers reads that as "conflicting prices, refuse to
-price the row" and loses a price that was never ambiguous. Tiers are evaluated in
-order and the first that yields anything wins, so the more specific rule takes it.
+`MTUUX***-GK` also matches — and those two catalogue rows **disagree two times in
+three** on the real list (of 32 hospitals pricing both, only 11 agree; for `RFPS`,
+0 of 4). So unioning the tiers reads that as "conflicting prices, refuse to price
+the row" and loses a price that was never ambiguous. Tiers are evaluated in order
+and the first that yields anything wins the *direct* price.
+
+But the losing tiers are not discarded — `ComponentMatch.fallbacks` keeps them,
+because the winning tier having no price **at this hospital** is not the same as
+there being no evidence. `MTUUX` is priced at 96 hospitals and `MTUUX***-GK` at
+only 80, and **64 of those 96 have no variant price at all**; across the five
+family/variant pairs that is 202 hospital×component intersections that would
+otherwise come back blank. Estimate rung 1b uses the family row at the same
+hospital, and writes it **rose** — that same 2-in-3 disagreement is the proof
+that a family price is not a variant price. It ranks above every cross-hospital
+rung, because the hospital is what sets the price.
 
 ### Wasted (yellow) cells are skipped, not filled
 
@@ -200,7 +292,8 @@ from the price list, rose `FFC7CE` for an inferred estimate, still red where the
 was no evidence. New `app/pricing/` package (`tabs`, `normalize`, `match`,
 `estimate`, `ingest`, `enrich`), a fifth Reference Data tile, and
 `db/11_hospital_prices.sql`. See "Decisions" above for the five places this
-deliberately departs from the written work instructions.
+deliberately departs from the written work instructions, and for the three
+defects that running it against the real price list turned up afterwards.
 
 The run validates itself before publishing: the workbook is snapshotted before
 and after and the diff must equal exactly the set of cells the run planned to

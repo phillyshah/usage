@@ -505,3 +505,119 @@ def test_the_price_list_appears_in_reference_status():
     seed_price_list(_mh_list())
     masters = client.get("/reference/status").json()["masters"]
     assert masters["prices"]["rows"] >= 1
+
+
+# ==========================================================================
+# Regressions found by running the real Hospital_Price_List against the code.
+# Every one of these failed silently: no exception, no wrong number on screen,
+# just a price that never appeared. That is why a green suite missed them.
+# ==========================================================================
+def test_four_star_wildcards_match_like_three_star_ones():
+    """The catalogue writes three, four or more stars — ``ACLM****-UK`` and
+    ``RFPS****-GK`` are both real. Splitting on a literal ``***`` leaves the
+    fourth star to be escaped into the pattern, which then matches nothing;
+    19 price rows on the Summary tab were unreachable."""
+    assert mt.compile_code_pattern("ACLM****-UK").match("ACLMRL100-UK")
+    assert mt.compile_code_pattern("RFPS****-GK").match("RFPSLA00-GK")
+    # and the three-star families still behave
+    assert mt.compile_code_pattern("MTUUX***-GK").match("MTUUX100-GK")
+    assert not mt.compile_code_pattern("MTUUX***-GK").match("MTUUX100-K")
+
+
+def test_aggregate_columns_are_not_ingested_as_hospitals():
+    """The Summary tab's last column is ``AVERAGE ITEM PRICE`` — a spreadsheet
+    statistic. Left in, the estimate ladder medians *across hospitals* and folds
+    that average back in as though it were an independent account."""
+    parsed = parse_price_list(price_list_bytes({
+        MO_TAB: {"meta": ["Item", "Class", "Part Type"],
+                 "hospitals": ["Blake Hospital", "AVERAGE ITEM PRICE"],
+                 "rows": [("ALCRX", ["Knee", "Tibial"],
+                           {"Blake Hospital": 1000, "AVERAGE ITEM PRICE": 1630})]},
+    }))
+    assert [r["hospital"] for r in parsed["rows"]] == ["Blake Hospital"]
+    assert parsed["tabs"][MO_TAB]["hospitals"] == 1
+
+
+def test_an_average_column_cannot_be_matched_as_a_hospital():
+    assert not mt.match_hospital("Average Item Price", ["Blake Hospital"]).matched
+
+
+def test_a_generic_system_name_does_not_pick_one_sibling_facility():
+    """'Baylor, Scott, & White' names no facility, and the list holds five of
+    them. Picking the highest scorer means picking on suffix length."""
+    m = mt.match_hospital("Baylor, Scott, & White", [
+        "Baylor Scott & White Star", "Baylor Scott & White Frisco",
+        "Baylor Scott & White Sherman", "Baylor Scott & White Sunnyvale",
+        "Baylor Scott & White Centennial"])
+    assert m.method == "ambiguous" and not m.matched
+
+
+def test_a_named_facility_resolves_against_its_siblings():
+    """The same five siblings, but this query *does* name one. Stripping the
+    generic words makes the two forms identical."""
+    m = mt.match_hospital("Baylor Scott & White Medical Center - Sunnyvale", [
+        "Baylor Scott & White Sunnyvale", "Baylor Scott & White Centennial"])
+    assert m.method == "core"
+    assert m.name == "Baylor Scott & White Sunnyvale"
+
+
+def test_a_typo_resolves_when_it_is_near_exact():
+    """Hazelton / Hazleton, against two other Lehigh Valley facilities."""
+    m = mt.match_hospital("Lehigh Valley Hospital - Hazelton", [
+        "Lehigh Valley Hosp Hazleton", "Lehigh Valley Hosp Highland",
+        "Lehigh Valley Hosp Pocono"])
+    assert m.name == "Lehigh Valley Hosp Hazleton"
+
+
+def test_core_matches_are_not_green():
+    """``meaningful_hospital`` strips 'hospital', 'surgery' and 'center', so a
+    hospital and its surgery centre collapse together — plausibly two different
+    accounts. Good enough to estimate from, not good enough to tell the reviewer
+    not to check."""
+    m = mt.match_hospital("Boca Raton Hospital", ["Boca Raton Surg Ctr"])
+    assert m.method == "core" and m.matched
+    assert not m.confident
+
+
+def test_family_price_at_the_same_hospital_is_used_when_the_variant_is_unpriced():
+    """The component tier short-circuits, so a REF ending -GK resolves to the
+    wildcard row. When that row has no price at this hospital but the bare
+    family row does, the family price is the best same-hospital evidence there
+    is — written rose, because the two rows are demonstrably different prices."""
+    seed_price_list({MH_TAB: {
+        "meta": ["Item", "Description"],
+        "hospitals": ["Blake Hospital (HCA)", "Other Hospital"],
+        "rows": [
+            # the variant row is priced somewhere else, but not here
+            ("MTUUX***-GK", ["TIBIAL BASE PLATE (TITAN)"], {"Other Hospital": 925}),
+            # the family row is priced HERE
+            ("MTUUX", ["TIBIAL BASE PLATE"], {"Blake Hospital (HCA)": 700}),
+        ]}})
+    data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["direct"] == 0 and summary["estimates"] == 1
+    _, value, rgb = usage_prices(out)[0]
+    assert value == 700
+    assert rgb.endswith("FFC7CE")
+
+
+def test_the_variant_row_still_wins_when_both_are_priced_here():
+    """The fall-through must not become a general union: where both rows carry a
+    price for this hospital, the more specific one is the answer, and it is a
+    direct (green) price."""
+    seed_price_list({MH_TAB: {
+        "meta": ["Item", "Description"],
+        "hospitals": ["Blake Hospital (HCA)"],
+        "rows": [
+            ("MTUUX***-GK", ["TIBIAL BASE PLATE (TITAN)"],
+             {"Blake Hospital (HCA)": 925}),
+            ("MTUUX", ["TIBIAL BASE PLATE"], {"Blake Hospital (HCA)": 700}),
+        ]}})
+    data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["direct"] == 1
+    _, value, rgb = usage_prices(out)[0]
+    assert value == 925
+    assert rgb.endswith("39FF14")

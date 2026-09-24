@@ -26,6 +26,19 @@ HOSPITAL_ALIASES: dict[str, str] = {}
 # after the last one of these, so the start column is detected, never assumed.
 META_HEADERS = {"item", "class", "part type", "description", "sap customer #"}
 
+# Trailing summary columns that are statistics, not accounts. The real Summary
+# tab ends in "AVERAGE ITEM PRICE" — 74 priced cells whose values give them away
+# (2357.142857, 1183.571429). Left in, it becomes a hospital that the estimate
+# ladder then medians *across* hospitals, folding a derived average back in as
+# though it were an independent observation; measured, that moved the result for
+# 37 of 58 components. Nothing is lost by dropping it: the ladder already
+# computes a central tendency from the raw per-account values, and does it
+# better, because it checks the spread first.
+AGGREGATE_HEADERS = {
+    "average item price", "average", "avg", "average price", "mean",
+    "list price", "min", "max",
+}
+
 # Dropped from a hospital name before comparison (legal suffixes).
 LEGAL_SUFFIXES = {
     "llc", "inc", "corp", "corporation", "company", "co", "pllc", "lp", "ltd",

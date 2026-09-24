@@ -71,12 +71,18 @@ def _same_hospital(rows: list[UsageRow], hospital: str | None) -> list[UsageRow]
 def estimate_price(target: UsageRow, observations: list[UsageRow],
                    tab_prices: dict[str, dict[str, float]],
                    tab_catalog: dict[str, str],
-                   component_codes: tuple[str, ...]) -> Estimate:
+                   component_codes: tuple[str, ...],
+                   fallback_codes: tuple[tuple[str, ...], ...] = (),
+                   hospital_column: str | None = None) -> Estimate:
     """Best supported estimate for ``target``.
 
     ``observations`` are the rows of the same workbook that already carry a
     price. ``tab_prices`` maps item_code -> {hospital -> price} for the ONE
     configured tab; nothing from another distributor's tab ever reaches here.
+
+    ``fallback_codes`` are the less specific price-list rows that also matched
+    this component (see ComponentMatch.fallbacks), and ``hospital_column`` is
+    the price-list hospital this row resolved to. Together they support rung 1b.
     """
     priced = [r for r in observations if r.price is not None]
     ref_u = (target.ref or "").strip().upper()
@@ -91,6 +97,22 @@ def estimate_price(target: UsageRow, observations: list[UsageRow],
             v = typical(vals)
             # A zero only survives with this, the strongest possible evidence.
             return Estimate(v, "same hospital, same REF", zero_flagged=(v == 0))
+
+    # 1b. A less specific price-list row for the same component family, priced
+    # at THIS hospital. On the real list 'MTUUX' is priced at 96 hospitals and
+    # 'MTUUX***-GK' at only 80, and 64 of those 96 have no variant price at all
+    # — so without this the row is unpriced even though the account has a family
+    # price on file. It is weaker than the variant's own row (where both exist
+    # they disagree two times in three, which is exactly why the winning tier
+    # still short-circuits for direct prices) but stronger than any
+    # cross-hospital rung below, because the hospital is what sets the price.
+    if hospital_column:
+        for tier_codes in fallback_codes:
+            vals = [v for v in (tab_prices.get(c, {}).get(hospital_column)
+                                for c in tier_codes) if v]
+            if vals:
+                return Estimate(typical(vals),
+                                "price list, same hospital, component family")
 
     # 2. Same hospital, same part type.
     if pt:
