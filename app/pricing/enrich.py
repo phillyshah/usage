@@ -30,7 +30,7 @@ from app.pipeline.template import MAXX_HEALTH, MAXX_ORTHO, detect_template
 from app.pricing import match as mt
 from app.pricing import normalize as nz
 from app.pricing.estimate import UsageRow, estimate_price
-from app.pricing.tabs import DISTRIBUTOR_TABS
+from app.pricing.tabs import DISTRIBUTOR_TABS, LEGAL_SUFFIXES
 
 log = logging.getLogger("pricing.enrich")
 
@@ -79,6 +79,10 @@ class RunSummary:
     unresolved_causes: dict[str, int] = field(default_factory=dict)
     fuzzy_hospitals: list[str] = field(default_factory=list)
     ambiguous_hospitals: list[str] = field(default_factory=list)
+    # Rows priced from a tab other than the ticket's own distributor's. Always
+    # written rose, and listed here so it is visible which accounts are being
+    # priced from another sales channel's list.
+    off_tab: list[str] = field(default_factory=list)
 
     def note(self, cause: str) -> None:
         self.unresolved += 1
@@ -93,6 +97,7 @@ class RunSummary:
             "unresolved_causes": self.unresolved_causes,
             "fuzzy_hospitals": sorted(set(self.fuzzy_hospitals)),
             "ambiguous_hospitals": sorted(set(self.ambiguous_hospitals)),
+            "off_tab": sorted(set(self.off_tab)),
         }
 
 
@@ -180,29 +185,50 @@ def _entity_by_image(wb) -> dict[str, str]:
     return out
 
 
-def resolve_tab(stem: str | None, entity_map: dict[str, str]) -> tuple[str, str]:
-    """(entity, tab) for one Usage row, or raise.
+def normalize_entity(text: str | None) -> str:
+    """The form ``DISTRIBUTOR_TABS`` keys are written in.
 
-    The Tickets sheet is the authority, but ``write.py`` blanks Entity whenever
-    the vision read was low-confidence, so a filename fallback is required
-    rather than optional. ``detect_template`` is exactly that rule — the MH/MO
-    prefix convention — and reusing it keeps the two in step.
+    ``Entity`` is the model's reading of printed text, so one batch of tickets
+    from one company arrives spelled several ways — the first real workbook had
+    ``Maxx Orthopedics``, ``Maxx Orthopedics, Inc`` and ``Maxx Orthopedics, Inc.``
+    across 37 tickets. Punctuation and legal suffixes are dropped, reusing the
+    suffix list that already exists for hospitals.
+    """
+    if not text:
+        return ""
+    toks = [t for t in nz._NON_ALNUM.sub(" ", str(text).lower()).split()
+            if t not in LEGAL_SUFFIXES]
+    return " ".join(toks)
+
+
+def resolve_entity(stem: str | None, entity_map: dict[str, str]) -> tuple[str, str]:
+    """``(entity, preferred_tab)`` for one Usage row, or ``("", "")``.
+
+    **The filename is tried first, and that ordering is the fix.** ``Entity`` is
+    a vision read of printed text and varies; the ``MH``/``MO`` filename prefix
+    is a naming convention the business actually follows, and ``detect_template``
+    already treats it as authoritative for PHI redaction. Preferring the shakier
+    signal is what made a whole 153-row workbook fail on one ticket that read
+    ``MAXX`` — a string no amount of normalizing can resolve, while its filename
+    ``MO18711-A`` says Maxx Orthopedics outright.
+
+    Returns empty strings rather than raising: one unresolvable row should cost
+    that row, not the run. The caller fails the run only if nothing resolves.
     """
     stem = (stem or "").strip()
-    entity = entity_map.get(stem) or ""
-    if not entity and stem:
+    entity = ""
+    if stem:
         guessed = detect_template(None, stem)
         if guessed in (MAXX_HEALTH, MAXX_ORTHO):
             entity = guessed
-    tab = DISTRIBUTOR_TABS.get(nz.collapse(entity)) if entity else None
-    if not tab:
-        who = entity or "an unidentified distributor"
-        raise EnrichmentError(
-            f"No price-list tab is configured for {who} "
-            f"(row image {stem or 'unknown'}). Add it to DISTRIBUTOR_TABS "
-            "before running step 5.",
-            "unconfigured_distributor")
-    return entity, tab
+    written = (entity_map.get(stem) or "").strip()
+    if not entity:
+        entity = written
+    elif written and normalize_entity(written) != normalize_entity(entity):
+        log.info("row image %s: filename says %r, ticket says %r — using the "
+                 "filename", stem, entity, written)
+    tab = DISTRIBUTOR_TABS.get(normalize_entity(entity)) if entity else ""
+    return entity, tab or ""
 
 
 # --------------------------------------------------------------------------
@@ -214,6 +240,50 @@ class TabIndex:
     hospitals: list[str]
     catalog: dict[str, str]                      # item_code -> description
     prices: dict[str, dict[str, float]]          # item_code -> {hospital: price}
+
+
+# Hospital-match quality, best first. A tab that knows the hospital exactly is
+# a better source than one that only recognises it fuzzily, whichever tab the
+# ticket's own distributor uses — see choose_tab.
+_TIER_RANK = {"exact": 0, "alias": 1, "core": 2, "fuzzy": 3}
+
+
+def load_all_tabs() -> dict[str, TabIndex]:
+    """Every tab in the stored price list, not only the configured ones."""
+    return {tab: load_tab(tab) for tab in db.hospital_price_tabs()}
+
+
+def choose_tab(hospital: str | None, preferred: str,
+               indexes: dict[str, TabIndex]) -> tuple[str, "mt.HospitalMatch"] | None:
+    """Which tab to price this hospital from, and how well it matched.
+
+    The tabs turned out to be *where an account is listed*, not a price
+    agreement scoped to one distributor: on the first real workbook, 27 of 88
+    blank prices belonged to hospitals that are priced only on a tab the old
+    one-tab-per-entity rule forbade. So every tab is searched.
+
+    Ranked by match quality first and only then by the ticket's own tab, because
+    preference alone picks the wrong answer where it matters most: on that file
+    'Methodist Hospital HCA' matched its own tab fuzzily (to 'Methodist Hospital
+    Southlake', a different facility) while another tab had it exactly. Quality
+    first fixes those 21 rows; the tie-break still keeps a row at home whenever
+    two tabs know the hospital equally well.
+    """
+    scored = []
+    for tab, index in indexes.items():
+        m = mt.match_hospital(hospital, index.hospitals)
+        if m.matched:
+            scored.append((_TIER_RANK.get(m.method, 9), tab != preferred, tab, m))
+    if not scored:
+        return None
+    scored.sort(key=lambda t: (t[0], t[1], t[2]))
+    best_tier = scored[0][0]
+    tied = [t for t in scored if t[0] == best_tier]
+    # Two different tabs knowing the hospital equally well, and neither of them
+    # the ticket's own, is a genuine coin flip. Say so instead of picking.
+    if len(tied) > 1 and all(tab != preferred for _, _, tab, _ in tied):
+        return None
+    return scored[0][2], scored[0][3]
 
 
 def load_tab(tab: str) -> TabIndex:
@@ -256,25 +326,47 @@ def _direct_price(hosp: mt.HospitalMatch, comp: mt.ComponentMatch,
     return vals.pop()
 
 
-def price_row(row: UsageRow, index: TabIndex, observations: list[UsageRow],
-              summary: RunSummary) -> CellPlan | None:
+def price_row(row: UsageRow, preferred_tab: str, indexes: dict[str, TabIndex],
+              observations: list[UsageRow], summary: RunSummary) -> CellPlan | None:
     if not row.hospital:
         summary.note("no_hospital")
         return None
+    if not preferred_tab:
+        summary.note("unknown_distributor")
+        return None
 
-    hosp = mt.match_hospital(row.hospital, index.hospitals)
+    chosen = choose_tab(row.hospital, preferred_tab, indexes)
+    if chosen is None:
+        # No tab knows this hospital (or two knew it equally well and neither
+        # was the ticket's own). That rules out a price-list lookup, but NOT an
+        # estimate: rungs 1, 2, 4 and 6 are built from other rows of this same
+        # workbook and never touch the price list. Carry on with the ticket's
+        # own tab and an unmatched hospital.
+        tab, hosp = preferred_tab, mt.HospitalMatch(None, "none")
+    else:
+        tab, hosp = chosen
+    index = indexes[tab]
+    at_home = tab == preferred_tab
+
     if hosp.method == "fuzzy":
         summary.fuzzy_hospitals.append(f"{row.hospital} -> {hosp.name}")
-    elif hosp.method == "ambiguous":
-        summary.ambiguous_hospitals.append(row.hospital)
+    if not at_home:
+        summary.off_tab.append(f"{row.hospital} -> {tab}")
 
     comp = mt.match_component(row.ref, row.description, index.catalog)
 
     direct = _direct_price(hosp, comp, index)
     if direct is not None:
-        return CellPlan(row.excel_row, direct, "direct",
-                        f"price list: {hosp.name}", index.tab, hosp.name,
-                        comp.codes)
+        if at_home:
+            return CellPlan(row.excel_row, direct, "direct",
+                            f"price list: {hosp.name}", tab, hosp.name,
+                            comp.codes)
+        # The price is real, but it is another sales channel's number for this
+        # account. Green says "came straight from your list, don't check it",
+        # which is a promise only the ticket's own tab can make.
+        return CellPlan(row.excel_row, direct, "estimate",
+                        f"price list: {hosp.name} (on the {tab} tab)",
+                        tab, hosp.name, comp.codes)
 
     est = estimate_price(row, observations, index.prices, index.catalog,
                          comp.codes, comp.fallbacks, hosp.name)
@@ -285,11 +377,9 @@ def price_row(row: UsageRow, index: TabIndex, observations: list[UsageRow],
         if est.value == 0:
             summary.zero_estimates += 1
         return CellPlan(row.excel_row, float(est.value), "estimate", est.basis,
-                        index.tab, hosp.name, comp.codes)
+                        tab, hosp.name, comp.codes)
 
-    if hosp.method == "ambiguous":
-        summary.note("hospital_ambiguous")
-    elif not hosp.matched:
+    if not hosp.matched:
         summary.note("hospital_not_in_price_list")
     elif not row.ref:
         summary.note("no_ref")
@@ -379,19 +469,26 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
 
     summary = RunSummary()
     entity_map = _entity_by_image(wb)
-    indexes: dict[str, TabIndex] = {}
-    rows_by_tab: dict[str, list[UsageRow]] = {}
-    blanks: list[tuple[UsageRow, str]] = []
+    indexes = load_all_tabs()
+    if not indexes:
+        raise EnrichmentError(
+            "The price list has not been uploaded yet. Add it on the Reference "
+            "Data tile before running step 5.", "missing_tab")
+    rows_by_entity: dict[str, list[UsageRow]] = {}
+    blanks: list[tuple[UsageRow, str, str]] = []
+    resolved_rows = 0
 
     for r in range(2, ws.max_row + 1):
         stem = ws.cell(row=r, column=idx["Source Image Filename"]).value
         if stem is None and all(ws.cell(row=r, column=c).value is None
                                 for c in idx.values()):
             continue
-        _, tab = resolve_tab(str(stem) if stem is not None else None, entity_map)
-        if tab not in indexes:
-            indexes[tab] = load_tab(tab)
-            summary.tabs.append(tab)
+        entity, tab = resolve_entity(
+            str(stem) if stem is not None else None, entity_map)
+        if tab:
+            resolved_rows += 1
+            if tab not in summary.tabs:
+                summary.tabs.append(tab)
 
         cell = ws.cell(row=r, column=price_col)
         ref = ws.cell(row=r, column=idx["Ref Number"]).value
@@ -406,10 +503,11 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
             category=(info or {}).get("category"),
             price=cell.value if isinstance(cell.value, (int, float)) else None,
         )
-        # Observations stay partitioned by tab: "same part type elsewhere in
-        # this file" must not quietly import a Maxx Orthopedics price into a
-        # Maxx Health row, which a mixed batch makes possible.
-        rows_by_tab.setdefault(tab, []).append(urow)
+        # Observations are partitioned by DISTRIBUTOR, not by tab: "same part
+        # type elsewhere in this file" must not import a Maxx Orthopedics price
+        # into a Maxx Health row, which a mixed batch makes possible. Tabs are
+        # no longer distributor-scoped, so the entity is what this keys on.
+        rows_by_entity.setdefault(normalize_entity(entity), []).append(urow)
 
         if (r, price_col) in merged:
             continue
@@ -421,11 +519,21 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
             summary.skipped_wasted += 1
             continue
         summary.eligible += 1
-        blanks.append((urow, tab))
+        blanks.append((urow, tab, normalize_entity(entity)))
+
+    # A row whose distributor cannot be identified costs that row, not the run —
+    # but a file where NOTHING resolves is a genuinely unconfigured distributor
+    # and should say so loudly rather than return a workbook full of blanks.
+    if blanks and resolved_rows == 0:
+        raise EnrichmentError(
+            "No price-list tab is configured for any ticket in this file. Check "
+            "the Entity column, or add the distributor to DISTRIBUTOR_TABS.",
+            "unconfigured_distributor")
 
     plans: list[CellPlan] = []
-    for urow, tab in blanks:
-        plan = price_row(urow, indexes[tab], rows_by_tab[tab], summary)
+    for urow, tab, ent_key in blanks:
+        plan = price_row(urow, tab, indexes, rows_by_entity.get(ent_key, []),
+                         summary)
         if plan is not None:
             plans.append(plan)
 

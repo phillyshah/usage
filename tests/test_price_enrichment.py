@@ -362,9 +362,16 @@ def test_at8_a_wasted_yellow_cell_is_skipped_and_stays_yellow():
     assert value is None and rgb.endswith("FFFF00")
 
 
-def test_at10_and_at11_maxx_health_rows_only_ever_use_the_mh_tab():
-    """AT10/AT11: the Orthopedics tab prices the same component differently and
-    must not influence a Maxx Health row, directly or through an estimate."""
+def test_at10_and_at11_a_row_prefers_its_own_distributors_tab():
+    """AT10/AT11, as amended.
+
+    The written instructions said a Maxx Health row may use *only* the MH tab.
+    The first real workbook showed why that is too strong: 27 of its 88 blank
+    prices belonged to hospitals listed only on a tab the rule forbade, so the
+    tabs are where an account is listed, not a price agreement scoped to one
+    distributor. The rule is now preference, not exclusivity — and the part that
+    still matters is asserted here: where BOTH tabs know the hospital, the
+    ticket's own tab wins and its price is the one used."""
     seed_price_list({
         MH_TAB: {"meta": ["Item", "Description"], "hospitals": ["Blake Hospital (HCA)"],
                  "rows": [("MTUUX***-GK", ["TIBIAL BASE PLATE (TITAN)"],
@@ -621,3 +628,135 @@ def test_the_variant_row_still_wins_when_both_are_priced_here():
     _, value, rgb = usage_prices(out)[0]
     assert value == 925
     assert rgb.endswith("39FF14")
+
+
+# ==========================================================================
+# Regressions from the first real usage workbook (review_542abe77.xlsx):
+# 153 rows, 88 blank prices, and it failed outright on row 1.
+# ==========================================================================
+@pytest.mark.parametrize("entity", [
+    "Maxx Orthopedics",        # 30 tickets in the real file
+    "Maxx Orthopedics, Inc",   # 6
+    "Maxx Orthopedics, Inc.",  # 1
+])
+def test_entity_spelling_variants_all_resolve(entity):
+    """Entity is the model's reading of printed text, so one batch from one
+    company arrives spelled several ways. An exact-string lookup fails on all
+    but the first, and one failing row used to abort the whole workbook."""
+    from app.pricing.enrich import resolve_entity
+    _, tab = resolve_entity("ticket-1", {"ticket-1": entity})
+    assert tab == MO_TAB
+
+
+def test_the_filename_resolves_the_entity_when_the_text_is_unmappable():
+    """One real ticket's Entity read just 'MAXX' — ambiguous between the two
+    companies, and no amount of normalising fixes it. Its filename said
+    MO18711-A, which is not ambiguous at all."""
+    from app.pricing.enrich import resolve_entity
+    assert resolve_entity("MO18711-A", {"MO18711-A": "MAXX"})[1] == MO_TAB
+    # and with the Entity column blank, which write.py does on low confidence
+    assert resolve_entity("MO18711-A", {})[1] == MO_TAB
+
+
+def test_the_filename_wins_when_it_disagrees_with_the_ticket_text():
+    """detect_template is already trusted to pick the PHI redaction region off
+    the filename; pricing should not trust a different signal more."""
+    from app.pricing.enrich import resolve_entity
+    entity, tab = resolve_entity("MO18711-A", {"MO18711-A": "Maxx Health"})
+    assert (entity, tab) == ("Maxx Orthopedics", MO_TAB)
+
+
+def test_one_unresolvable_row_does_not_fail_the_run():
+    """A 153-row workbook used to die on a single ticket whose distributor could
+    not be identified."""
+    seed_price_list(_mh_list())
+    data = seed_usage([
+        {"filename": "MH1.jpg", "entity": "Maxx Health",
+         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"},
+        {"filename": "ticket-oddly-named", "entity": "Someone Else Entirely",
+         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"},
+    ])
+    _, summary = enrich_workbook(data)
+    assert summary["direct"] == 1
+    assert summary["unresolved_causes"].get("unknown_distributor") == 1
+
+
+def test_a_file_with_no_resolvable_rows_still_fails_loudly():
+    """The reason the original rule existed: a workbook that is entirely from an
+    unconfigured distributor should say so, not return a sheet full of blanks."""
+    seed_price_list(_mh_list())
+    data = seed_usage([{"filename": "ticket-1", "entity": "Someone Else Entirely",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    with pytest.raises(EnrichmentError) as exc:
+        enrich_workbook(data)
+    assert exc.value.reason == "unconfigured_distributor"
+
+
+def _two_tabs(mh_price=None, mo_price=None, mh_hosp="Blake Hospital (HCA)",
+              mo_hosp="Blake Hospital (HCA)"):
+    tabs = {}
+    if mh_price is not None:
+        tabs[MH_TAB] = {"meta": ["Item", "Description"], "hospitals": [mh_hosp],
+                        "rows": [("MTUUX***-GK", ["TIBIAL BASE PLATE (TITAN)"],
+                                  {mh_hosp: mh_price})]}
+    if mo_price is not None:
+        tabs[MO_TAB] = {"meta": ["Item", "Class", "Part Type"], "hospitals": [mo_hosp],
+                        "rows": [("MTUUX***-GK", ["Knee", "Tibial"],
+                                  {mo_hosp: mo_price})]}
+    return tabs
+
+
+def test_a_hospital_only_on_another_tab_is_priced_as_an_estimate():
+    """Blake Medical Center and Parkridge are priced only on 'MH for MO', and
+    the real file's tickets are all Maxx Orthopedics. Those 15 rows came back
+    blank before. They are priced now — but rose, because it is another sales
+    channel's number for the account."""
+    seed_price_list(_two_tabs(mh_price=925))       # nothing on the MO tab
+    data = seed_usage([{"filename": "MO18711-A", "entity": "Maxx Orthopedics",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["estimates"] == 1 and summary["direct"] == 0
+    assert summary["off_tab"] == ["Blake Hospital -> MH for MO"]
+    _, value, rgb = usage_prices(out)[0]
+    assert value == 925 and rgb.endswith("FFC7CE")
+
+
+def test_the_own_tab_still_wins_when_both_tabs_have_the_hospital():
+    seed_price_list(_two_tabs(mh_price=5555, mo_price=925))
+    data = seed_usage([{"filename": "MO18711-A", "entity": "Maxx Orthopedics",
+                        "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert summary["direct"] == 1 and summary["off_tab"] == []
+    _, value, rgb = usage_prices(out)[0]
+    assert value == 925 and rgb.endswith("39FF14")
+
+
+def test_a_better_match_on_another_tab_beats_a_fuzzy_one_at_home():
+    """The worst case in the real file. 'Methodist Hospital HCA' matched its own
+    tab only fuzzily — to 'Methodist Hospital Southlake', a different facility —
+    while the other tab held 'Methodist Hospital (HCA)' exactly. Preferring the
+    home tab regardless would have put a confidently wrong number in 21 cells."""
+    seed_price_list(_two_tabs(mh_price=925, mo_price=5555,
+                              mh_hosp="Methodist Hospital (HCA)",
+                              mo_hosp="Methodist Hospital Southlake"))
+    data = seed_usage([{"filename": "MO18711-A", "entity": "Maxx Orthopedics",
+                        "hospital": "Methodist Hospital HCA", "ref": "MTUUX100-GK"}])
+    out, summary = enrich_workbook(data)
+    assert usage_prices(out)[0][1] == 925, "took the Southlake price"
+    assert summary["off_tab"] == ["Methodist Hospital HCA -> MH for MO"]
+
+
+def test_bracketed_and_unbracketed_system_markers_match():
+    """The price list writes 'X (HCA)', the usage sheet writes 'X HCA'.
+    normalize_hospital strips the parenthetical — which is what makes
+    'Centerpoint Med Ctr (HCA)' match 'Centerpoint Medical Center' — but that
+    same strip destroys this match instead of making it."""
+    m = mt.match_hospital("Methodist Hospital HCA",
+                          ["Methodist Hospital Southlake", "Methodist Hospital (HCA)"])
+    assert m.method == "exact" and m.name == "Methodist Hospital (HCA)"
+
+
+def test_stripping_still_matches_the_centerpoint_case():
+    """The form that motivated stripping in the first place must not regress."""
+    m = mt.match_hospital("Centerpoint Medical Center", ["Centerpoint Med Ctr (HCA)"])
+    assert m.method == "exact"
