@@ -16,13 +16,13 @@ Last updated: 2026-09-25.
 
 | | |
 |---|---|
-| Version in `main` | **2.14.0** (PR #41 merged); **2.15.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.14.0** — confirmed live 2026-09-25 |
+| Version in `main` | **2.15.1** (PR #44 merged); **2.16.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.15.1** — confirmed live 2026-09-25 |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
-| Schema | current through `db/11` (applied 2026-09-24). 2.14.0 needs **no** migration |
-| Tests | 295 passed, 2 skipped |
+| Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
+| Tests | 315 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -96,6 +96,50 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### What a reviewed step-5 workbook is allowed to teach
+
+Closing the loop pays off because `db.price_suggestion` is consulted at
+*extraction* time (`assemble.py:281`): a learned price fills a blank for the
+same hospital, amber so it is still eyeballed, and never overrides a price read
+off the ticket. So a blank filled once need never be blank again.
+
+The risk is the mirror image, and it is why this is not simply "harvest the
+file". `harvest_ticket` learns every non-blank line price unconditionally, so
+pointing it at a step-5 output would teach all the estimates as facts, which
+`price_suggestion` would then serve back — the tool citing its own arithmetic.
+Three rules keep that from happening:
+
+| in the returned file | learned? | as |
+|---|---|---|
+| value **changed** by the reviewer | yes | `correction` — authoritative, never overwritten |
+| unchanged and **green** | yes | `price_list` — dropped on the next price-list upload |
+| unchanged and **rose** | **no** | an estimate nobody touched is still a guess |
+| blanked out again | no | rejecting a value is not asserting one |
+
+`learning_price.source` is what makes this expressible, and it defaults to
+`correction` so every pre-existing row — all of which came from the step-4
+path — is marked truthfully and stays out of any purge.
+
+**The price-list rows are cleared when a new price list is uploaded.** The list
+is full-replaced monthly but `learning_price` is never purged, so without that
+a learned price-list value would outlive the update meant to supersede it. Only
+`source='price_list'` rows go; human corrections are untouched. This was the one
+objection to learning green values at all, and clearing is what answers it.
+
+### The run id rides in the workbook's custom properties
+
+Step 4 has to know which run a returned file came from, and there is nowhere in
+the grid to put that without the "only blank Price cells changed" validator
+objecting — rightly. `docProps/custom.xml` is outside the cell grid entirely,
+survives an openpyxl round-trip, and is invisible to the operator.
+
+Note the join it avoids: `learning_price` is keyed on (part, hospital), both of
+which the Usage sheet already carries, so no line id is needed. Just as well —
+Usage and Line Items are **not** row-for-row (153 vs 159 on the first real
+file), and `parse_corrected_workbook` reads Line Items, which step 5 never
+touches. Without the stamp and the recorded cells, uploading a priced workbook
+to step 4 would report success and silently learn nothing.
 
 ### The price-list tabs are where an account is listed, not a distributor's contract
 
@@ -382,6 +426,21 @@ surfaces `cache_read_input_tokens`.
 
 ## What shipped
 
+### 2.16.0 — A reviewed step-5 workbook teaches the next extraction
+Send a priced spreadsheet back through step 4 and the prices are learned against
+(part, hospital), so the next batch arrives with those cells already filled.
+Changed values are learned as human decisions; price-list values are learned but
+expire with the list they came from; untouched estimates are never learned. See
+"Decisions" above for why each of those is the way it is. Requires
+`db/12_price_learning.sql`.
+
+### 2.15.1 — Step 5 download button
+`el()` reads only class/text/html/attrs, so an `href` passed at the top level was
+silently dropped and the download button had no destination. Also wired up
+`api.pricingLatest()`, which was defined and never called, so a finished workbook
+became unreachable after a page reload. Added `tests/test_static_ui.py`, since
+this broke the whole deliverable of step 5 while every Python test passed.
+
 ### 2.15.0 — Step 5 against the first real workbook
 The first real usage workbook (153 rows, 88 blank prices) failed outright on row
 one. Three defects, all visible in that single file, all covered under
@@ -476,6 +535,12 @@ applied during extraction, same-hospital price fill, and a price sanity ceiling.
 
 ## Ops gotchas
 
+- **`db/12_price_learning.sql` must run before 2.16.0 deploys.** It adds
+  `learning_price.source` and `pricing_runs.cells`, both additive with no data
+  change. Without it the price harvest fails and step 4 loses the new behaviour.
+- **Uploading a price list now deletes learned rows** — but only those with
+  `source='price_list'`, never a human correction. They are rebuilt on the next
+  step-4 round trip with the new numbers.
 - **The status email needs SMTP credentials in `.env`, and nothing else.** With
   them blank the app behaves exactly as before and the card says which value is
   missing. There is no migration: recipients live in `app_settings`, which has

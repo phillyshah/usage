@@ -314,7 +314,7 @@ def test_at5_direct_match_fills_neon_green():
     seed_price_list(_mh_list())
     data = seed_usage([{"filename": "MH17469.jpg", "entity": "Maxx Health",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["direct"] == 1 and summary["estimates"] == 0
     _, value, rgb = usage_prices(out)[0]
     assert value == 925
@@ -331,7 +331,7 @@ def test_at6_estimate_fills_rose():
         {"filename": "MH2.jpg", "entity": "Maxx Health",
          "hospital": "Nowhere Surgical Partners", "ref": "ZZ-NOT-LISTED"},
     ])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["estimates"] == 1 and summary["direct"] == 0
     filled = [p for p in usage_prices(out) if p[1] == 640 and p[2]]
     assert any(rgb.endswith("FFC7CE") for _, _, rgb in filled)
@@ -343,7 +343,7 @@ def test_at7_an_existing_zero_price_is_left_alone():
     data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK",
                         "price": 0}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["eligible"] == 0 and summary["direct"] == 0
     assert usage_prices(out)[0][1] == 0
 
@@ -355,7 +355,7 @@ def test_at8_a_wasted_yellow_cell_is_skipped_and_stays_yellow():
     data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK",
                         "wasted": True}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["skipped_wasted"] == 1
     assert summary["eligible"] == 0
     _, value, rgb = usage_prices(out)[0]
@@ -383,7 +383,7 @@ def test_at10_and_at11_a_row_prefers_its_own_distributors_tab():
     })
     data = seed_usage([{"filename": "MH17469.jpg", "entity": "Maxx Health",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["tabs"] == [MH_TAB]
     assert usage_prices(out)[0][1] == 925
 
@@ -423,7 +423,7 @@ def test_a_blank_entity_falls_back_to_the_mh_mo_filename_prefix():
     seed_price_list(_mh_list())
     data = seed_usage([{"filename": "MH17469.jpg", "entity": None,
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    _, summary = enrich_workbook(data)
+    _, summary, _cells = enrich_workbook(data)
     assert summary["tabs"] == [MH_TAB] and summary["direct"] == 1
 
 
@@ -438,7 +438,7 @@ def test_formulas_are_never_treated_as_blank_and_survive_the_round_trip():
     buf = io.BytesIO()
     wb.save(buf)
 
-    out, summary = enrich_workbook(buf.getvalue())
+    out, summary, _cells = enrich_workbook(buf.getvalue())
     assert summary["eligible"] == 0
     assert usage_prices(out)[0][1] == '=IF(1=1,"","")'
 
@@ -487,7 +487,7 @@ def test_unresolved_rows_keep_their_red_fill_and_are_reported_by_cause():
     seed_price_list(_mh_list())
     data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
                         "hospital": None, "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["unresolved"] == 1
     assert summary["unresolved_causes"] == {"no_hospital": 1}
     _, value, rgb = usage_prices(out)[0]
@@ -504,7 +504,7 @@ def test_the_run_summary_always_adds_up():
         {"filename": "MH3.jpg", "entity": "Maxx Health",
          "hospital": "Blake Hospital", "ref": "MTUUX200-GK", "price": 400},
     ])
-    _, s = enrich_workbook(data)
+    _, s, _cells = enrich_workbook(data)
     assert s["eligible"] == s["direct"] + s["estimates"] + s["unresolved"]
 
 
@@ -602,7 +602,7 @@ def test_family_price_at_the_same_hospital_is_used_when_the_variant_is_unpriced(
         ]}})
     data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["direct"] == 0 and summary["estimates"] == 1
     _, value, rgb = usage_prices(out)[0]
     assert value == 700
@@ -623,7 +623,7 @@ def test_the_variant_row_still_wins_when_both_are_priced_here():
         ]}})
     data = seed_usage([{"filename": "MH1.jpg", "entity": "Maxx Health",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["direct"] == 1
     _, value, rgb = usage_prices(out)[0]
     assert value == 925
@@ -676,7 +676,7 @@ def test_one_unresolvable_row_does_not_fail_the_run():
         {"filename": "ticket-oddly-named", "entity": "Someone Else Entirely",
          "hospital": "Blake Hospital", "ref": "MTUUX100-GK"},
     ])
-    _, summary = enrich_workbook(data)
+    _, summary, _cells = enrich_workbook(data)
     assert summary["direct"] == 1
     assert summary["unresolved_causes"].get("unknown_distributor") == 1
 
@@ -714,7 +714,7 @@ def test_a_hospital_only_on_another_tab_is_priced_as_an_estimate():
     seed_price_list(_two_tabs(mh_price=925))       # nothing on the MO tab
     data = seed_usage([{"filename": "MO18711-A", "entity": "Maxx Orthopedics",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["estimates"] == 1 and summary["direct"] == 0
     assert summary["off_tab"] == ["Blake Hospital -> MH for MO"]
     _, value, rgb = usage_prices(out)[0]
@@ -725,7 +725,7 @@ def test_the_own_tab_still_wins_when_both_tabs_have_the_hospital():
     seed_price_list(_two_tabs(mh_price=5555, mo_price=925))
     data = seed_usage([{"filename": "MO18711-A", "entity": "Maxx Orthopedics",
                         "hospital": "Blake Hospital", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert summary["direct"] == 1 and summary["off_tab"] == []
     _, value, rgb = usage_prices(out)[0]
     assert value == 925 and rgb.endswith("39FF14")
@@ -741,7 +741,7 @@ def test_a_better_match_on_another_tab_beats_a_fuzzy_one_at_home():
                               mo_hosp="Methodist Hospital Southlake"))
     data = seed_usage([{"filename": "MO18711-A", "entity": "Maxx Orthopedics",
                         "hospital": "Methodist Hospital HCA", "ref": "MTUUX100-GK"}])
-    out, summary = enrich_workbook(data)
+    out, summary, _cells = enrich_workbook(data)
     assert usage_prices(out)[0][1] == 925, "took the Southlake price"
     assert summary["off_tab"] == ["Methodist Hospital HCA -> MH for MO"]
 

@@ -480,6 +480,21 @@ function renderCorrectionsResult(data) {
   ]);
   const body = [grid];
 
+  // Prices learned from a step-5 round trip. Only shown when there are any,
+  // so an ordinary corrections upload reads exactly as it always did.
+  const p = data && data.prices;
+  if (p && (p.corrected || p.confirmed || p.estimates_skipped)) {
+    const parts = [];
+    if (p.corrected) parts.push(`${pluralize(p.corrected, "price")} you corrected`);
+    if (p.confirmed) parts.push(`${p.confirmed} confirmed from the price list`);
+    body.push(el("p", { class: "notice-text", text:
+      `Prices remembered: ${parts.join(", ")}. ` +
+      (p.estimates_skipped
+        ? `${pluralize(p.estimates_skipped, "estimate")} you didn't change ` +
+          "were left out — an estimate isn't a fact until someone stands behind it."
+        : "") }));
+  }
+
   if (unknown > 0) {
     body.push(el("p", { class: "notice-text", html:
       `An <strong>unknown ticket</strong> just means a row in your spreadsheet didn't line up with a ticket the tool knows about — usually a typo in the ticket number or a row that was added by hand. It's safe to ignore, or double-check those rows.` }));
