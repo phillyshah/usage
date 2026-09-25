@@ -31,18 +31,44 @@ def collapse(text: str | None) -> str:
     return " ".join((text or "").lower().split())
 
 
-def normalize_hospital(name: str | None) -> str:
-    """'Centerpoint Med Ctr (HCA)' -> 'centerpoint medical center'."""
-    if not name:
-        return ""
-    s = _PARENTHETICAL.sub(" ", str(name).lower())
-    s = _NON_ALNUM.sub(" ", s)
+def _normalize_tokens(text: str) -> str:
     out = []
-    for tok in s.split():
+    for tok in _NON_ALNUM.sub(" ", text).split():
         if tok in LEGAL_SUFFIXES:
             continue
         out.append(HOSPITAL_ABBREVIATIONS.get(tok, tok))
     return " ".join(out)
+
+
+def normalize_hospital(name: str | None) -> str:
+    """'Centerpoint Med Ctr (HCA)' -> 'centerpoint medical center'."""
+    if not name:
+        return ""
+    return _normalize_tokens(_PARENTHETICAL.sub(" ", str(name).lower()))
+
+
+def hospital_forms(name: str | None) -> tuple[str, ...]:
+    """Every normalized spelling a name could reasonably be written as.
+
+    Dropping the health-system tag is what makes 'Centerpoint Med Ctr (HCA)'
+    match a surgeon master that writes 'Centerpoint Medical Center'. But the
+    usage sheet also writes the tag *without* the brackets, and then dropping it
+    destroys the match instead of making it:
+
+        'Methodist Hospital HCA' vs 'Methodist Hospital (HCA)'
+            stripped -> 'methodist hospital hca' / 'methodist hospital'  (fuzzy)
+            kept     -> 'methodist hospital hca' / 'methodist hospital hca'  EXACT
+
+    and on the real data the best fuzzy alternative was a different facility
+    entirely ('Methodist Hospital Southlake'). So both spellings are indexed and
+    either may carry an exact match; neither form alone is sufficient.
+    """
+    if not name:
+        return ()
+    lowered = str(name).lower()
+    stripped = _normalize_tokens(_PARENTHETICAL.sub(" ", lowered))
+    kept = _normalize_tokens(lowered)
+    return (stripped,) if kept == stripped else (stripped, kept)
 
 
 def meaningful_hospital(normalized: str) -> str:

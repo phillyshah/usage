@@ -85,11 +85,18 @@ def match_hospital(usage_hospital: str | None, candidates: list[str]) -> Hospita
     for c in candidates:
         by_norm.setdefault(nz.normalize_hospital(c), []).append(c)
 
-    # 1. exact. Several columns can share a normalized name (the Summary tab has
-    # 'Surgcenter of Plano' twice); that is only ambiguous if their prices
-    # disagree, which ingest resolves, so any of them will do here.
-    if norm in by_norm:
-        return HospitalMatch(by_norm[norm][0], "exact")
+    # 1. exact, against every spelling either side could be written as. The
+    # health-system tag appears bracketed on the price list and bare on the
+    # usage sheet ('Methodist Hospital (HCA)' vs 'Methodist Hospital HCA'), so
+    # matching one canonical form misses it — and the nearest fuzzy alternative
+    # on the real data was a different facility. See normalize.hospital_forms.
+    query_forms = set(nz.hospital_forms(usage_hospital))
+    for form in query_forms:
+        if form in by_norm:
+            return HospitalMatch(by_norm[form][0], "exact")
+    for c in candidates:
+        if query_forms & set(nz.hospital_forms(c)):
+            return HospitalMatch(c, "exact")
 
     # 2. configured alias
     alias = HOSPITAL_ALIASES.get(norm)

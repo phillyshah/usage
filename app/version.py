@@ -5,9 +5,33 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.14.0"
+VERSION = "2.15.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.15.0",
+        "date": "2026-09-25",
+        "notes": [
+            "Fixed step 5 failing on real spreadsheets. The Entity column is "
+            "read off the ticket photo, so one batch from one company arrives "
+            "spelled several ways ('Maxx Orthopedics', 'Maxx Orthopedics, "
+            "Inc.', sometimes just 'MAXX'), and any spelling the tool didn't "
+            "recognise stopped the whole file. It now identifies the "
+            "distributor from the MH/MO filename first, which is reliable",
+            "One unidentifiable ticket no longer abandons the rest of the "
+            "file — that row is reported as unpriced and the others go through",
+            "Prices are now found on any tab of the price list, not only the "
+            "one belonging to the ticket's distributor. On the first real "
+            "spreadsheet that recovered 27 prices that existed but were being "
+            "ignored. A price from the ticket's own tab is still green; one "
+            "borrowed from another tab is rose, so you can see it came from "
+            "elsewhere",
+            "Hospitals written 'Methodist Hospital HCA' now match price-list "
+            "entries written 'Methodist Hospital (HCA)'. Before this, 21 rows "
+            "in one file were being matched to a different Methodist hospital "
+            "altogether",
+        ],
+    },
     {
         "version": "2.14.0",
         "date": "2026-09-25",

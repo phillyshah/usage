@@ -16,13 +16,13 @@ Last updated: 2026-09-25.
 
 | | |
 |---|---|
-| Version in `main` | **2.13.0** (PR #40 merged); **2.14.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.13.0** — confirmed live 2026-09-24 |
+| Version in `main` | **2.14.0** (PR #41 merged); **2.15.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.14.0** — confirmed live 2026-09-25 |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
 | Schema | current through `db/11` (applied 2026-09-24). 2.14.0 needs **no** migration |
-| Tests | 283 passed, 2 skipped (261 + 22 for the status email) |
+| Tests | 295 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -96,6 +96,62 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### The price-list tabs are where an account is listed, not a distributor's contract
+
+The written work instructions scoped each distributor to one tab (acceptance
+tests 10 and 11: "Maxx Health uses only MH for MO"). The first real workbook
+disproved it. Of its 88 blank prices, **27 belonged to hospitals priced only on a
+tab that rule forbade** — Blake Medical Center and Parkridge on `MH for MO`,
+Comprehensive Outpatient Joint and Spine Institute on `STINSON ORTHO`, all from
+Maxx Orthopedics tickets.
+
+Confirmed with the user, and the rule is now **preference, not exclusivity**:
+
+- every tab is searched, ranked by how well it matches the hospital
+  (`exact` > `alias` > `core` > `fuzzy`), ties broken toward the ticket's own tab
+- a price from the ticket's **own** tab, on an exact/aliased hospital, is green
+- a price from **any other** tab is always rose, however good the match — it is
+  another sales channel's number for that account, and the run summary lists
+  every off-tab source under `off_tab`
+
+**Ranking by quality before preference is load-bearing.** Preferring the home tab
+unconditionally picks the wrong answer exactly where it hurts: `Methodist
+Hospital HCA` matched its own tab only fuzzily, to `Methodist Hospital
+Southlake` — a different facility — while another tab had it exactly. That was
+21 rows of one file.
+
+### Entity is a vision read; the filename is a convention
+
+`Entity` is the model reading printed text off the ticket, so one batch from one
+company arrives spelled several ways. The first real file had `Maxx Orthopedics`
+(30), `Maxx Orthopedics, Inc` (6), `Maxx Orthopedics, Inc.` (1), `MAXX` (1) and
+blank (9) — and the lookup was an exact string match, so four of those five
+failed, and one failing row aborted all 153.
+
+`detect_template` on the `MH`/`MO` filename prefix resolved **every** row. It is
+already the authoritative signal for PHI redaction (2.12.2), so pricing now tries
+it **first** and falls back to the entity text (normalized, legal suffixes
+stripped). A disagreement is logged and the filename wins.
+
+The corollary: an unresolvable row costs that row, not the run. A file where
+*nothing* resolves still fails loudly, which is what the original rule was for.
+
+### Stripping the health-system tag cuts both ways
+
+`normalize_hospital` drops a trailing parenthetical so `Centerpoint Med Ctr
+(HCA)` matches a master that writes `Centerpoint Medical Center`. But the usage
+sheet also writes the tag **without** brackets, and then the strip destroys the
+match:
+
+```
+'Methodist Hospital HCA' vs 'Methodist Hospital (HCA)'
+    stripped -> 'methodist hospital hca' / 'methodist hospital'      0.900, fuzzy
+    kept     -> 'methodist hospital hca' / 'methodist hospital hca'  EXACT
+```
+
+Both spellings are now indexed (`normalize.hospital_forms`) and either may carry
+an exact match. Neither form alone is sufficient — keep both.
 
 ### The status email measures uploads, not batches, and uses the team's day
 
@@ -325,6 +381,17 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.15.0 — Step 5 against the first real workbook
+The first real usage workbook (153 rows, 88 blank prices) failed outright on row
+one. Three defects, all visible in that single file, all covered under
+"Decisions" above: entity spelling variants breaking an exact-string lookup, the
+one-tab-per-distributor rule hiding 27 prices that existed, and parenthetical
+stripping turning an exact hospital match into a wrong fuzzy one.
+
+After: the run completes, 28 green / 55 rose / 5 unresolved, the counts add up,
+every green value was verified verbatim against the price list, and `Methodist
+Hospital HCA` resolves to `Methodist Hospital (HCA)` instead of Southlake.
 
 ### 2.14.0 — Weekday status email
 Every weekday at 5pm Eastern the app emails a short summary of the day, or says
