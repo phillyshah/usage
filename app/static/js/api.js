@@ -151,15 +151,6 @@ export const api = {
   },
 
   /**
-   * GET /metrics/auto-resolve?weeks=N -> [{week, pct_confident}]
-   */
-  autoResolveMetrics(weeks = 8) {
-    return request(`/metrics/auto-resolve?weeks=${encodeURIComponent(weeks)}`, {
-      method: "GET",
-    });
-  },
-
-  /**
    * GET /metrics/auto-resolve-daily?days=N (ascending date)
    * -> [{date, pct_confident, fields, confident}]
    */
@@ -255,18 +246,13 @@ export const api = {
   /**
    * POST /pricing/enrich (multipart, single file, field "file")
    * -> 200 {run_id, status, summary, download_url}
-   * The enriched workbook is fetched separately via pricingSheetUrl(): this
-   * helper reads every response as text and can't carry a binary body.
+   * The response carries a download_url rather than the file: this helper
+   * reads every response as text and can't carry a binary body.
    */
   enrichPrices(file) {
     const fd = new FormData();
     fd.append("file", file, file.name);
     return request("/pricing/enrich", { method: "POST", body: fd });
-  },
-
-  /** Relative URL for an enriched workbook download (used as an href). */
-  pricingSheetUrl(runId) {
-    return `/pricing/runs/${encodeURIComponent(runId)}/sheet`;
   },
 
   /** GET /pricing/latest -> {} | {run_id, created_at, summary, download_url} */

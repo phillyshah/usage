@@ -566,8 +566,12 @@ function renderPricingResult(data) {
 
   if (data && data.download_url) {
     body.push(el("a", {
-      class: "btn btn-primary", href: data.download_url, download: "",
+      class: "btn btn-primary",
       text: "Download the priced spreadsheet",
+      // href/download MUST go through attrs — el() only reads class/text/html/
+      // attrs, so passing them at the top level renders a button that looks
+      // right and does nothing.
+      attrs: { href: data.download_url, download: "" },
     }));
   }
 
@@ -792,6 +796,34 @@ $("#notify-test").addEventListener("click", async () => {
     btn.textContent = original;
   }
 });
+
+/**
+ * Restore the last successful run's download link on load.
+ *
+ * Without this the link exists only in the result box of the run that produced
+ * it, so a page reload — or coming back tomorrow — leaves a finished workbook
+ * sitting in storage with no way to reach it.
+ */
+async function loadLastPricingRun() {
+  try {
+    const d = await api.pricingLatest();
+    if (!d || !d.run_id) return;
+    const s = d.summary || {};
+    renderNotice(pricingResult, "info", "Your last run", [
+      el("p", { class: "notice-text", text:
+        `${fmtWhen(d.created_at)} — ${num(s, "direct")} filled from the price list, ` +
+        `${num(s, "estimates")} estimated, ${num(s, "unresolved")} left blank.` }),
+      el("a", {
+        class: "btn btn-secondary",
+        text: "Download it again",
+        attrs: { href: d.download_url, download: "" },
+      }),
+    ]);
+  } catch {
+    // No previous run, or the call failed — the card is still fully usable.
+  }
+}
+loadLastPricingRun();
 
 /* Freshness elements, one per tile. */
 const gtinStatus = $("#gtin-status");

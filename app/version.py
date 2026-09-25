@@ -5,9 +5,21 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.15.0"
+VERSION = "2.15.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.15.1",
+        "date": "2026-09-25",
+        "notes": [
+            "Fixed the step 5 download button doing nothing when clicked. The "
+            "prices were being filled in correctly and the file was saved — "
+            "the button just wasn't wired to it",
+            "The last run's spreadsheet can now be downloaded again after a "
+            "page reload, instead of being reachable only in the moment it "
+            "finished",
+        ],
+    },
     {
         "version": "2.15.0",
         "date": "2026-09-25",
