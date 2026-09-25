@@ -698,6 +698,101 @@ wireRefTile({
   ])],
 });
 
+/* ===================================================================== *
+ *  Daily status email
+ * ===================================================================== */
+const notifyForm = $("#notify-form");
+const notifyRecipients = $("#notify-recipients");
+const notifyEnabled = $("#notify-enabled");
+const notifyConfig = $("#notify-config");
+const notifyResult = $("#notify-result");
+const notifySchedule = $("#notify-schedule");
+
+function renderNotifyConfig(d) {
+  notifyConfig.replaceChildren();
+  if (!d) return;
+  if (d.schedule) notifySchedule.textContent = d.schedule;
+
+  // Whether mail can be sent at all, in the server's own words. "Not set up
+  // yet" is a normal state, not an error, so it reads as a note rather than a
+  // failure — but the toggle is useless until it's resolved, so say which
+  // value is missing.
+  notifyConfig.classList.toggle("is-empty", !d.email_configured);
+  if (!d.email_configured) {
+    notifyConfig.append(el("span", { text:
+      `Not connected to email yet — ${d.reason || "no mail server is configured."}` }));
+    notifyEnabled.disabled = true;
+    $("#notify-test").disabled = true;
+  } else {
+    notifyEnabled.disabled = false;
+    $("#notify-test").disabled = false;
+    const last = d.last_send;
+    notifyConfig.append(el("span", { text: last
+      ? `Last send ${fmtWhen(last.at)} — ${last.sent ? "delivered" : "failed"}: ${last.detail || ""}`
+      : "Connected to email. Nothing sent yet." }));
+  }
+}
+
+async function loadNotifications() {
+  try {
+    const d = await api.notifications();
+    notifyRecipients.value = (d.recipients || []).join("\n");
+    notifyEnabled.checked = !!d.enabled;
+    renderNotifyConfig(d);
+  } catch {
+    // Leave the form usable; the Save button will surface any real problem.
+  }
+}
+
+notifyForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const btn = $("#notify-save");
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Saving…";
+  try {
+    const d = await api.saveNotifications({
+      recipients: notifyRecipients.value,
+      enabled: notifyEnabled.checked,
+    });
+    renderNotifyConfig(d);
+    const who = (d.recipients || []).length;
+    renderNotice(notifyResult, "success", "Saved",
+      [el("p", { class: "notice-text", text: d.enabled
+        ? `${who} ${who === 1 ? "person" : "people"} will get the status email every weekday at ${d.schedule}.`
+        : "The daily status email is turned off." })]);
+  } catch (err) {
+    renderNotice(notifyResult, "error", "We couldn't save that", [], errorDetail(err));
+    // The checkbox may have been refused server-side; re-read the real state.
+    loadNotifications();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
+$("#notify-test").addEventListener("click", async () => {
+  const btn = $("#notify-test");
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "Sending…";
+  try {
+    const d = await api.testNotification();
+    renderNotice(notifyResult, "success", "Test sent",
+      [el("p", { class: "notice-text", text:
+        `${d.detail || "Sent."} Subject: "${d.subject}"` })]);
+    loadNotifications();
+  } catch (err) {
+    renderNotice(notifyResult, "error", "The test email didn't send",
+      [el("p", { class: "notice-text", text:
+        "The mail server refused it. The exact reason is below." })],
+      errorDetail(err));
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+});
+
 /* Freshness elements, one per tile. */
 const gtinStatus = $("#gtin-status");
 const partStatus = $("#part-status");
@@ -729,6 +824,7 @@ async function loadReferenceStatus() {
     const extra = (parts || lots)
       ? ` · ${parts.toLocaleString()} parts, ${lots.toLocaleString()} lots` : "";
     renderFreshness(referenceStatus, log.row_count, log.updated_at, extra);
+    loadNotifications();
   } catch {
     // Leave whatever is shown; tiles stay usable even if status fails.
   }

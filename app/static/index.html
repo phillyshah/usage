@@ -522,6 +522,41 @@
         </div>
       </section>
 
+      <section class="card" aria-labelledby="notify-title">
+        <h2 class="step-title" id="notify-title">Daily status email</h2>
+        <p class="step-help">
+          A day nobody runs the app looks exactly like a day with no surgeries &mdash;
+          nothing happens, and nothing says so. This sends a short summary every
+          weekday at <strong id="notify-schedule">5pm</strong>, whether or not anything was
+          run, so a missed day is visible the same afternoon instead of at month end.
+        </p>
+
+        <div id="notify-config" class="ref-fresh" aria-live="polite"></div>
+
+        <form id="notify-form" class="step-body">
+          <label class="field-label" for="notify-recipients">Who gets it</label>
+          <textarea id="notify-recipients" class="field-input" rows="3"
+                    placeholder="head-of-department@example.com&#10;someone-else@example.com"
+                    aria-describedby="notify-recipients-help"></textarea>
+          <p class="step-help" id="notify-recipients-help">One address per line.</p>
+
+          <label class="check-row">
+            <input type="checkbox" id="notify-enabled" />
+            <span>Send the daily status email</span>
+          </label>
+
+          <div class="step-actions">
+            <button type="submit" id="notify-save" class="btn btn-primary">Save</button>
+            <button type="button" id="notify-test" class="btn btn-secondary">Send a test now</button>
+          </div>
+        </form>
+
+        <div id="notify-result" class="result-area" hidden></div>
+        <p class="muted-note">
+          The email contains counts only &mdash; never a patient, surgeon or hospital name.
+        </p>
+      </section>
+
     </div><!-- /#panel-reference -->
 
     <!-- ===================== PANEL: Debug Console ===================== -->

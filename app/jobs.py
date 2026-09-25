@@ -1,4 +1,5 @@
-"""Scheduled jobs (APScheduler): daily batch run + nightly retention purge.
+"""Scheduled jobs (APScheduler): daily batch run, nightly retention purge, and
+the weekday status email.
 
 No Celery/Redis at this volume. The scheduler starts with the FastAPI app and
 stops with it.
@@ -6,8 +7,11 @@ stops with it.
 from __future__ import annotations
 
 import logging
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
+
+from app.config import settings
 
 from app.db import db
 from app.storage import delete_object, split_ref
@@ -65,6 +69,22 @@ def learning_health_job() -> None:
         log.exception("learning watermark refresh failed: %s", e)
 
 
+def daily_status_job() -> None:
+    """Tell the team's inbox whether the app was used today.
+
+    Runs on its own clock, not UTC like the jobs above: 5pm means 5pm to the
+    people reading it, and a fixed offset would slip an hour at the DST
+    changeover.
+    """
+    from app.notify import send_daily_status
+
+    try:
+        result = send_daily_status()
+        log.info("daily status job: %s", result.get("detail") or result.get("reason"))
+    except Exception as e:  # pragma: no cover
+        log.exception("daily status failed: %s", e)
+
+
 def start_scheduler() -> BackgroundScheduler:
     global _scheduler
     if _scheduler is not None:
@@ -76,10 +96,21 @@ def start_scheduler() -> BackgroundScheduler:
     sched.add_job(daily_batch_job, "cron", hour=2, minute=0, id="daily_batch")
     sched.add_job(purge_job, "cron", hour=3, minute=0, id="purge")
     sched.add_job(learning_health_job, "cron", hour=3, minute=30, id="learning_health")
+    # Weekdays only, in the team's own timezone.
+    try:
+        tz = ZoneInfo(settings.notify_timezone)
+    except Exception:
+        log.warning("unknown notify_timezone %r; status email will run in UTC",
+                    settings.notify_timezone)
+        tz = ZoneInfo("UTC")
+    sched.add_job(daily_status_job, "cron", day_of_week="mon-fri",
+                  hour=settings.notify_hour, minute=0, timezone=tz,
+                  id="daily_status")
     sched.start()
     _scheduler = sched
     log.info("scheduler started (daily batch 02:00 UTC, purge 03:00 UTC, "
-             "learning snapshot 03:30 UTC)")
+             "learning snapshot 03:30 UTC, status email %02d:00 %s Mon-Fri)",
+             settings.notify_hour, settings.notify_timezone)
     return sched
 
 

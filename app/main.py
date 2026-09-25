@@ -127,6 +127,24 @@ def diag():
         info["learning"] = {"status": h["status"], "total": h["total"]}
     except Exception as exc:  # pragma: no cover - diag must never 500
         info["learning"] = {"status": "unknown", "error": str(exc)}
+    # The status notifier's own health. A monitor that fails quietly is the
+    # exact failure it exists to catch, so its last attempt is reported here.
+    try:
+        from app.email import email_configuration
+        from app.notify import ENABLED_KEY, last_send
+
+        _, reason = email_configuration()
+        last = last_send()
+        info["notifications"] = {
+            "enabled": (db.get_app_setting(ENABLED_KEY) or "").lower()
+                       in ("1", "true", "yes"),
+            "email_configured": reason is None,
+            "reason": reason,
+            "last_send": {"at": last.get("at"), "sent": last.get("sent"),
+                          "detail": last.get("detail")} if last else None,
+        }
+    except Exception as exc:  # pragma: no cover
+        info["notifications"] = {"status": "unknown", "error": str(exc)}
     return info
 
 
@@ -438,6 +456,80 @@ def reference_status():
     }
     out["masters"] = db.masters_freshness()
     return out
+
+
+# ---------------------------------------------------------------------------
+# Weekday status email — "did anyone actually run this today?"
+# ---------------------------------------------------------------------------
+@app.get("/notifications")
+def notifications_get():
+    """Current settings plus whether mail can be sent at all, in words."""
+    from app.email import email_configuration, recipients
+    from app.notify import (ENABLED_KEY, RECIPIENTS_KEY, collect_status,
+                            last_send, render, schedule_label)
+
+    _, reason = email_configuration()
+    status = collect_status()
+    subject, _, _ = render(status)
+    return {
+        "enabled": (db.get_app_setting(ENABLED_KEY) or "").lower()
+                   in ("1", "true", "yes"),
+        "recipients": recipients(db.get_app_setting(RECIPIENTS_KEY)),
+        "email_configured": reason is None,
+        "reason": reason,
+        "schedule": schedule_label(),
+        "last_send": last_send(),
+        # What today's email would say if it went out now — so the setting can
+        # be understood without waiting for 5pm.
+        "preview_subject": subject,
+    }
+
+
+@app.put("/notifications")
+def notifications_put(payload: dict = Body(...)):
+    from app.email import recipients
+    from app.notify import ENABLED_KEY, RECIPIENTS_KEY
+
+    if "recipients" in payload:
+        raw = payload["recipients"]
+        if isinstance(raw, list):
+            raw = ",".join(str(x) for x in raw)
+        clean = recipients(raw)
+        supplied = [x for x in str(raw).replace(";", ",").replace("\n", ",").split(",")
+                    if x.strip()]
+        if len(supplied) != len(clean):
+            return JSONResponse(
+                {"detail": "Some of those don't look like email addresses. "
+                           "Use one address per line."}, status_code=400)
+        db.set_app_setting(RECIPIENTS_KEY, ",".join(clean))
+
+    if "enabled" in payload:
+        on = bool(payload["enabled"])
+        if on and not recipients(db.get_app_setting(RECIPIENTS_KEY)):
+            return JSONResponse(
+                {"detail": "Add at least one email address before turning the "
+                           "daily status on."}, status_code=400)
+        db.set_app_setting(ENABLED_KEY, "true" if on else "false")
+
+    return notifications_get()
+
+
+@app.post("/notifications/test")
+def notifications_test():
+    """Send today's status right now.
+
+    Setup fails in ways only the relay knows about — a wrong password, an
+    unauthorised sender. Finding that out at 5pm on a day nobody ran the app is
+    too late, so this puts a real message on the wire on demand.
+    """
+    from app.notify import send_daily_status
+
+    record = send_daily_status(force=True)
+    if not record.get("sent"):
+        return JSONResponse(
+            {"detail": record.get("detail") or record.get("reason")
+                       or "Could not send.", **record}, status_code=400)
+    return record
 
 
 # ---------------------------------------------------------------------------
