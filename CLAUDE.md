@@ -29,3 +29,14 @@ re-litigating, and open threads.
 
 ## Branch
 Active dev branch: `claude/clever-cerf-oaqc5g`
+
+## How Andy wants things reported
+- **Always give the link. Don't wait to be asked.** Every time one of these comes
+  up, the URL goes in the message:
+  - a PR — the full `https://github.com/phillyshah/usage/pull/N`, repeated in
+    later messages that refer to it, not just the one that created it
+  - a SQL migration to run — link the file on GitHub (`.../blob/main/db/NN_*.sql`)
+    and the raw URL, since it gets pasted into the Supabase SQL Editor
+  - anything deployed or viewable — the live URL
+- A reference like "PR #41" or "db/11" on its own is not enough. Assume he is on
+  a phone or in another window and cannot look it up.
