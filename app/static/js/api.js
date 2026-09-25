@@ -273,4 +273,23 @@ export const api = {
   pricingLatest() {
     return request("/pricing/latest", { method: "GET" });
   },
+
+  /** GET /notifications -> {enabled, recipients, email_configured, reason, ...} */
+  notifications() {
+    return request("/notifications", { method: "GET" });
+  },
+
+  /** PUT /notifications {enabled?, recipients?} -> the same shape back */
+  saveNotifications(payload) {
+    return request("/notifications", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /** POST /notifications/test -> sends today's status immediately */
+  testNotification() {
+    return request("/notifications/test", { method: "POST" });
+  },
 };

@@ -5,9 +5,29 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.13.0"
+VERSION = "2.14.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.14.0",
+        "date": "2026-09-25",
+        "notes": [
+            "New daily status email. Every weekday at 5pm the app emails a "
+            "short summary of what was done that day — or says plainly that "
+            "nothing was run. A day nobody uses the tool otherwise looks "
+            "exactly like a day with no surgeries, and goes unnoticed until "
+            "month end",
+            "The subject line carries the answer, so it's readable from a "
+            "phone notification without opening anything. Several missed days "
+            "in a row are counted in the subject too",
+            "Set who receives it under Reference data -> Daily status email. "
+            "You can change the list yourself; it doesn't need a new build",
+            "'Send a test now' puts a real message on the wire immediately, so "
+            "setup problems surface during setup rather than at 5pm",
+            "The email contains counts only — never a patient, surgeon or "
+            "hospital name",
+        ],
+    },
     {
         "version": "2.13.0",
         "date": "2026-09-23",

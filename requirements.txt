@@ -14,3 +14,5 @@ pyzbar
 biip
 pypdfium2
 apscheduler
+# zoneinfo needs a tz database; python:*-slim images ship without the OS one.
+tzdata

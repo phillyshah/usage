@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-25.
 
 ---
 
@@ -16,13 +16,13 @@ Last updated: 2026-09-24.
 
 | | |
 |---|---|
-| Version in `main` | **2.12.2** (PR #38 merged); **2.13.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.12.2** — confirmed live 2026-09-23 |
+| Version in `main` | **2.13.0** (PR #40 merged); **2.14.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.13.0** — confirmed live 2026-09-24 |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
-| Schema | current through `db/10`. **`db/11_hospital_prices.sql` is NOT applied yet** — it must run before 2.13.0 deploys |
-| Tests | 261 passed, 2 skipped (219 + 42 for step 5) |
+| Schema | current through `db/11` (applied 2026-09-24). 2.14.0 needs **no** migration |
+| Tests | 283 passed, 2 skipped (261 + 22 for the status email) |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -96,6 +96,49 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### The status email measures uploads, not batches, and uses the team's day
+
+Two traps, both of which would have made it quietly wrong:
+
+- **`daily_batch_job` runs unattended at 02:00 UTC** — which is 10pm Eastern the
+  *evening before* — and turns whatever is pending into a batch. So "a batch
+  exists today" can be true with nobody having touched the app. Uploading
+  tickets is the part only a person can do, so that is what silence is measured
+  against. Batches are still reported; they just aren't the alarm.
+- **`batches.run_date` defaults to Postgres `current_date`, which is UTC** and
+  rolls over at 8pm Eastern, so Thursday-evening work is stamped Friday. Every
+  window in `notify.py` is computed in `NOTIFY_TIMEZONE` from `created_at`. Do
+  not "simplify" it back to `run_date`.
+
+Weekends are skipped rather than counted in the consecutive-miss tally, so a
+Monday with nothing uploaded reads "1st weekday", not "3rd".
+
+### The status email cannot carry PHI, by type rather than by template
+
+`DayStatus` is a date and six integers. There is no field on it capable of
+holding a hospital, a surgeon or a patient's initials, so the renderer cannot
+leak one however the wording changes later. `tests/test_notify.py` asserts the
+dataclass's own field types, so widening it fails the suite rather than quietly
+opening a hole. The email also says so in its own footer, because the people
+receiving it are the ones who would notice if it stopped being true.
+
+### Email config mirrors the Maxx dashboard's contract, not its code
+
+Same variable names (`EMAIL_PROVIDER`, `EMAIL_FROM`, `SMTP_HOST/PORT/USER/
+PASSWORD`) and the same decision to return a *reason* instead of raising, so one
+set of relay credentials copies between the projects and "not configured yet"
+stays a state the UI can describe in words. What is deliberately **not** copied
+is that project's hand-rolled SMTP client: it exists because Node has no SMTP in
+its standard library. Python does — `smtplib.SMTP_SSL` plus `EmailMessage` is
+the whole thing in about fifteen lines, including the dot-stuffing that file
+warns about. Implicit TLS on 465 only, same reasoning: STARTTLS opens in
+plaintext and upgrades, so a downgrade is possible and every failure mode
+doubles.
+
+`resend`/`postmark` are accepted in the config contract (the dashboard's `.env`
+may name them) but refused with a sentence, because this app has no HTTP sender
+and a silent no-op would be worse.
 
 ### Three defects that a green test suite could not have caught
 
@@ -283,6 +326,21 @@ surfaces `cache_read_input_tokens`.
 
 ## What shipped
 
+### 2.14.0 — Weekday status email
+Every weekday at 5pm Eastern the app emails a short summary of the day, or says
+plainly that nothing was run. The problem is a silent one: a day nobody uses the
+tool produces no error and no empty report, so it stays invisible until month
+end. The subject carries the state (`Usage Fri 25 Sep: 3 batches, 47 tickets` /
+`... NOTHING RUN TODAY (3rd weekday)`) so it is readable from a phone
+notification. Recipients live in `app_settings`, editable in the UI without a
+deploy. No migration.
+
+It is sent **every** weekday rather than only on a miss, deliberately: an
+alert-only job that dies looks exactly like a good day, which is the same
+invisible-failure problem one level up. For the same reason the last send
+attempt — including the relay's own words on failure — is recorded and surfaced
+on the card and in `/diag`.
+
 ### 2.13.0 — Step 5: surgery price enrichment
 Blank Price cells are blank because the ticket quoted a *construct* total instead
 of a price per component; the accountant has been typing them in by hand against
@@ -351,6 +409,19 @@ applied during extraction, same-hospital price fill, and a price sanity ceiling.
 
 ## Ops gotchas
 
+- **The status email needs SMTP credentials in `.env`, and nothing else.** With
+  them blank the app behaves exactly as before and the card says which value is
+  missing. There is no migration: recipients live in `app_settings`, which has
+  existed since `db/01`.
+- **`tzdata` is in requirements.txt on purpose.** `python:*-slim` images ship
+  without the OS tz database, so `ZoneInfo("America/New_York")` would raise at
+  scheduler start and the 5pm job would never register.
+- **The 5pm job is pinned to a zone name, not an offset.** `NOTIFY_TIMEZONE`
+  handles EST/EDT, so 5pm stays 5pm. Verified across the 1 Nov 2026 changeover:
+  21:00 UTC before, 22:00 UTC after.
+- **Weekday-only still includes public holidays.** Thanksgiving will send a
+  "nothing run" alert. Known and accepted for now; a skip-list in `app_settings`
+  is the cheap fix if it becomes annoying.
 - **`db/11_hospital_prices.sql` must run before 2.13.0 deploys.** It creates
   `reference_hospital_prices` and `pricing_runs`. Without it the price-list tile
   and step 5 both fail with PGRST204 — the same class of failure as the

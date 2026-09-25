@@ -41,6 +41,24 @@ class Settings(BaseSettings):
     # Anthropic account.
     extract_patient_initials: bool = False
 
+    # --- Outbound email (daily status notification) ---
+    # Deliberately the same variable names as the Maxx dashboard, so one set of
+    # relay credentials copies between projects without translation. "Not
+    # configured" is a normal state the app ships in: email_configuration()
+    # returns a *reason* rather than raising, and the Notifications card says it
+    # in words instead of showing an error.
+    email_provider: str = "smtp"          # smtp | resend | postmark
+    email_from: str = ""                  # envelope sender the relay authenticates as
+    email_api_key: str = ""               # resend / postmark only
+    smtp_host: str = ""
+    smtp_port: int = 465                  # implicit TLS only — see app/email.py
+    smtp_user: str = ""
+    smtp_password: str = ""
+    # 5pm in the team's own timezone, not UTC and not a fixed offset, so it
+    # stays 5pm across the DST changeover.
+    notify_timezone: str = "America/New_York"
+    notify_hour: int = 17
+
     # --- Local / offline development ---
     # When true the app runs without Supabase or Anthropic: it uses an on-disk
     # store that mimics the Storage buckets and the deterministic-only pipeline.
