@@ -50,7 +50,11 @@ class Settings(BaseSettings):
     email_provider: str = "smtp"          # smtp | resend | postmark
     email_from: str = ""                  # envelope sender the relay authenticates as
     email_api_key: str = ""               # resend / postmark only
-    smtp_host: str = ""
+    # The same authenticated Hostinger relay the dashboard sends through: it
+    # signs SPF and DKIM and carries the provider's reputation, where a bare
+    # address nobody has heard from would not. A host on its own still sends
+    # nothing — EMAIL_FROM, SMTP_USER and SMTP_PASSWORD are all required too.
+    smtp_host: str = "smtp.hostinger.com"
     smtp_port: int = 465                  # implicit TLS only — see app/email.py
     smtp_user: str = ""
     smtp_password: str = ""

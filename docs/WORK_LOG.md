@@ -413,6 +413,13 @@ applied during extraction, same-hospital price fill, and a price sanity ceiling.
   them blank the app behaves exactly as before and the card says which value is
   missing. There is no migration: recipients live in `app_settings`, which has
   existed since `db/01`.
+- **The relay and the mailbox are shared with the Maxx dashboard** —
+  `smtp.hostinger.com`, sending as the dashboard's own address. Read the live
+  values with `docker compose exec maxxdash-dashboard printenv EMAIL_FROM
+  SMTP_HOST SMTP_USER SMTP_PASSWORD`; they are runtime-only and committed in
+  neither repo. The consequence worth writing down: **rotating that mailbox's
+  password breaks two apps, not one.** Hostinger also authenticates the envelope
+  sender, so `EMAIL_FROM` must equal `SMTP_USER` or the relay refuses outright.
 - **`tzdata` is in requirements.txt on purpose.** `python:*-slim` images ship
   without the OS tz database, so `ZoneInfo("America/New_York")` would raise at
   scheduler start and the 5pm job would never register.
