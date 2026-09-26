@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.packaging.custom import StringProperty
 from openpyxl.styles import PatternFill
 
 from app.db import db
@@ -43,6 +44,24 @@ YELLOW_RGB = "FFFF00"
 # decorated in Excel would silently lose them on save, and silently destroying
 # someone's work is worse than refusing to touch it.
 LOSSY_PARTS = ("xl/charts/", "xl/media/", "xl/drawings/", "vbaProject.bin")
+
+# The run id is stamped into the workbook's custom document properties rather
+# than a cell: it lives outside the grid, so it disturbs nothing the operator
+# sees and the "only blank Price cells changed" validator never sees it either.
+# When the file comes back through step 4 it is what says which run to diff
+# against — without it a returned workbook is just a column of numbers with no
+# way to tell a human's decision from the tool's guess.
+RUN_ID_PROP = "UsagePricingRunId"
+
+
+def stamped_run_id(wb) -> str | None:
+    try:
+        for prop in wb.custom_doc_props.props:
+            if prop.name == RUN_ID_PROP:
+                return str(prop.value) or None
+    except Exception:  # pragma: no cover - absent or unreadable props
+        pass
+    return None
 
 
 class EnrichmentError(ValueError):
@@ -439,9 +458,17 @@ def _validate(before: dict, after: dict, plans: list[CellPlan],
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
-def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
-    """Usage workbook bytes -> (enriched bytes, summary). Raises EnrichmentError
-    on anything that must not publish."""
+def enrich_workbook(data: bytes, run_id: str | None = None) -> tuple[bytes, dict, list[dict]]:
+    """Usage workbook bytes -> (enriched bytes, summary, cells).
+
+    ``cells`` is what was written, one record per filled cell: enough for step 4
+    to tell a reviewed number from an untouched one. Keyed on ref + hospital
+    because that is what ``learn_price`` needs — no line id required, which is
+    just as well, since Usage and Line Items are not row-for-row (153 vs 159 on
+    the first real file).
+
+    Raises EnrichmentError on anything that must not publish.
+    """
     _guard_lossy_content(data)
 
     # data_only=False (the default, stated for the record): data_only=True would
@@ -475,6 +502,7 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
             "The price list has not been uploaded yet. Add it on the Reference "
             "Data tile before running step 5.", "missing_tab")
     rows_by_entity: dict[str, list[UsageRow]] = {}
+    by_row_ref: dict[int, str | None] = {}
     blanks: list[tuple[UsageRow, str, str]] = []
     resolved_rows = 0
 
@@ -508,6 +536,7 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
         # into a Maxx Health row, which a mixed batch makes possible. Tabs are
         # no longer distributor-scoped, so the entity is what this keys on.
         rows_by_entity.setdefault(normalize_entity(entity), []).append(urow)
+        by_row_ref[r] = urow.ref
 
         if (r, price_col) in merged:
             continue
@@ -549,6 +578,13 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
             summary.estimates += 1
     _validate(before, _snapshot(wb), plans, price_col)
 
+    cells = [{"row": p.excel_row, "ref": by_row_ref.get(p.excel_row),
+              "hospital": p.hospital, "value": round(float(p.value), 2),
+              "kind": p.kind, "tab": p.tab}
+             for p in plans]
+    if run_id:
+        wb.custom_doc_props.append(StringProperty(name=RUN_ID_PROP, value=run_id))
+
     if summary.eligible != summary.direct + summary.estimates + summary.unresolved:
         raise EnrichmentError(
             "Internal check failed: the run summary does not add up "
@@ -558,4 +594,4 @@ def enrich_workbook(data: bytes) -> tuple[bytes, dict]:
 
     buf = io.BytesIO()
     wb.save(buf)
-    return buf.getvalue(), summary.as_dict()
+    return buf.getvalue(), summary.as_dict(), cells

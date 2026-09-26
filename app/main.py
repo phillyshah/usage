@@ -299,14 +299,22 @@ def get_batch_sheet(batch_id: str):
 # ---------------------------------------------------------------------------
 @app.post("/corrections/upload")
 async def corrections_upload(files: list[UploadFile] = File(...)):
+    import io as _io
+
+    from openpyxl import load_workbook
+
     from app.learning.diff import diff_ticket
     from app.learning.harvest import harvest_ticket
+    from app.pricing.enrich import stamped_run_id
+    from app.pricing.harvest import harvest_prices
     from app.sheets.read import parse_corrected_workbook
     from app.storage import CORRECTED_UPLOADS, put_object
 
     processed = 0
     matched = 0
     unknown = 0
+    prices = {"corrected": 0, "confirmed": 0, "estimates_skipped": 0,
+              "unchanged_kept": 0}
     for f in files:
         data = await f.read()
         path = put_object(CORRECTED_UPLOADS, f.filename or "corrected.xlsx", data,
@@ -333,6 +341,20 @@ async def corrections_upload(files: list[UploadFile] = File(...)):
             db.update_ticket(ticket_id, {"status": "verified"})
             sheet_matched += 1
 
+        # A step-5 workbook carries its run id in the custom document
+        # properties. The normal harvest above reads prices from "Line Items",
+        # which step 5 never touches, so without this the filled prices are
+        # invisible here — the upload would report success and learn nothing.
+        try:
+            wb = load_workbook(_io.BytesIO(data), data_only=True)
+            run_id = stamped_run_id(wb)
+            run = db.get_pricing_run(run_id) if run_id else None
+            if run:
+                for k, v in harvest_prices(wb, run).items():
+                    prices[k] = prices.get(k, 0) + v
+        except Exception as exc:  # never fail an upload over the price harvest
+            log.warning("pricing harvest skipped for %s: %s", f.filename, exc)
+
         processed += 1
         matched += sheet_matched
         unknown += sheet_unknown
@@ -353,7 +375,8 @@ async def corrections_upload(files: list[UploadFile] = File(...)):
     except Exception as exc:  # never fail the upload over the safeguard
         log.warning("learning watermark bump skipped: %s", exc)
 
-    return {"processed": processed, "tickets_matched": matched, "tickets_unknown": unknown}
+    return {"processed": processed, "tickets_matched": matched,
+            "tickets_unknown": unknown, "prices": prices}
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +575,20 @@ async def reference_prices(file: UploadFile = File(...)):
 
     loop = get_event_loop()
     try:
-        return await loop.run_in_executor(_executor, ingest_price_list, data)
+        result = await loop.run_in_executor(_executor, ingest_price_list, data)
+        # A new price list supersedes the old one, but learning_price is never
+        # purged — so a price learned FROM the old list would outlive it and
+        # keep being offered at extraction time. Drop those and only those;
+        # every human correction is left untouched. They come back on the next
+        # step-4 round trip, with the new numbers.
+        try:
+            dropped = db.clear_price_list_learning()
+            if dropped:
+                log.info("cleared %d price-list-sourced learned prices", dropped)
+            result["learned_prices_cleared"] = dropped
+        except Exception as exc:  # never fail the upload over the cleanup
+            log.warning("could not clear price-list-sourced learning: %s", exc)
+        return result
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
     except Exception as exc:
@@ -595,7 +631,8 @@ async def pricing_enrich(file: UploadFile = File(...)):
 
     loop = get_event_loop()
     try:
-        out, summary = await loop.run_in_executor(_executor, enrich_workbook, data)
+        out, summary, cells = await loop.run_in_executor(
+            _executor, enrich_workbook, data, run_id)
     except EnrichmentError as exc:
         return _fail(str(exc), exc.reason, 400)
     except Exception as exc:
@@ -619,6 +656,9 @@ async def pricing_enrich(file: UploadFile = File(...)):
         "skipped_wasted": summary["skipped_wasted"],
         "zero_estimates": summary["zero_estimates"],
         "summary": summary,
+        # What was written, cell by cell. Step 4 diffs the returned workbook
+        # against this to tell a reviewed price from an untouched one.
+        "cells": cells,
     })
     return {"run_id": run_id, "status": "succeeded", "summary": summary,
             "download_url": f"/pricing/runs/{run_id}/sheet"}

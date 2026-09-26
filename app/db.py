@@ -38,6 +38,8 @@ _SCHEMA_PROBES = [
     ("tickets", "patient_initials", "db/10_patient_initials.sql"),
     ("reference_hospital_prices", "item_code", "db/11_hospital_prices.sql"),
     ("pricing_runs", "run_id", "db/11_hospital_prices.sql"),
+    ("learning_price", "source", "db/12_price_learning.sql"),
+    ("pricing_runs", "cells", "db/12_price_learning.sql"),
 ]
 
 _LOCAL_TABLES = [
@@ -528,7 +530,20 @@ class Database:
             {"rep_code": rep_code, "rep_name": rep_name, "updated_at": _now_iso()},
         )
 
-    def learn_price(self, part_no: str, hospital: str, unit_price: float) -> None:
+    def learn_price(self, part_no: str, hospital: str, unit_price: float,
+                    source: str = "correction") -> bool:
+        """Remember a price for (part, hospital). Returns whether it was stored.
+
+        A human's number is never downgraded by a machine's: once a price is
+        learned from a correction, a later price-list-sourced write for the same
+        pair is ignored rather than overwriting it. The reverse is allowed — a
+        correction always wins.
+        """
+        if source != "correction":
+            for r in self.backend.find_all("learning_price", "part_no", part_no):
+                if r.get("hospital") == hospital and \
+                        (r.get("source") or "correction") == "correction":
+                    return False
         self.backend.upsert(
             "learning_price",
             ["part_no", "hospital"],
@@ -536,9 +551,26 @@ class Database:
                 "part_no": part_no,
                 "hospital": hospital,
                 "unit_price": unit_price,
+                "source": source,
                 "last_seen": _now_iso(),
             },
         )
+        return True
+
+    def clear_price_list_learning(self) -> int:
+        """Drop learned prices that came from the price list, keeping every
+        human correction.
+
+        Called when a new price list is uploaded. The price list is
+        full-replaced but learning_price is never purged, so without this a
+        learned price-list value would outlive the update meant to replace it
+        and keep being offered at extraction time.
+        """
+        n = len([r for r in self.backend.select("learning_price")
+                 if (r.get("source") or "correction") == "price_list"])
+        if n:
+            self.backend.delete_where("learning_price", "source", "price_list")
+        return n
 
     def learn_surgeon_map(self, key: str, surgeon_full_name: str | None,
                           hospital: str | None, dist_code: str | None) -> None:

@@ -5,9 +5,29 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.15.1"
+VERSION = "2.16.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.16.0",
+        "date": "2026-09-25",
+        "notes": [
+            "Step 5 now teaches the tool. Send a priced spreadsheet back "
+            "through step 4 and the prices are remembered against the part and "
+            "hospital, so next month those cells arrive already filled instead "
+            "of blank — step 5 has less to do each time",
+            "A price you typed or changed is remembered as your decision and "
+            "nothing later overwrites it. A price taken straight from the "
+            "hospital price list is remembered too, but only until the next "
+            "price list is uploaded, so it can never outlive the list it came "
+            "from",
+            "An estimate you didn't touch is deliberately NOT remembered. "
+            "Otherwise the tool would start treating its own guesses as "
+            "evidence and feeding them into the next guess",
+            "Step 4 now tells you how many prices it remembered, and how many "
+            "estimates it left alone",
+        ],
+    },
     {
         "version": "2.15.1",
         "date": "2026-09-25",
