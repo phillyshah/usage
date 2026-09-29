@@ -44,6 +44,12 @@ class Rect:
 class TemplateGeometry:
     name: str
     # Patient sticker region to redact (PHI). Conservative/oversized on purpose.
+    #
+    # NOTE: this is the *anchor*, not the mask. redact.py masks the whole band
+    # from this rectangle's left edge to the image edge, from the top of the
+    # image down to the top of grid_region — see patient_mask(). A fixed
+    # rectangle cannot survive a differently-framed photo, and one that came up
+    # short left a patient's date of birth visible in a stored image.
     patient_region: Rect
     # Header block (handwritten fields + entity) for the vision call context.
     header_region: Rect
@@ -72,6 +78,33 @@ _GEOMETRY: dict[str, TemplateGeometry] = {
 
 def geometry_for(template: str) -> TemplateGeometry | None:
     return _GEOMETRY.get(template)
+
+
+def patient_mask(template: str) -> Rect | None:
+    """The region redact.py actually blacks out.
+
+    Everything on the patient's side of the sheet, above the label grid. On both
+    layouts that band holds exactly two things: the patient sticker, and Maxx's
+    own printed contact boilerplate (phone, fax, "Email PO's to ..."). Nothing
+    the extraction reads — rep, rep code, hospital, surgery date and surgeon all
+    sit in header_region on the opposite side, and the labels all sit below in
+    grid_region.
+
+    So the whole band can go, which is what makes this framing-independent: the
+    sticker is covered wherever it lands in that zone, instead of only when the
+    photo happens to be cropped the way the fixed rectangle assumed.
+    """
+    geom = _GEOMETRY.get(template)
+    if geom is None:
+        return None
+    p, grid = geom.patient_region, geom.grid_region
+    # Health's sticker is on the left, Orthopedics' on the right: extend away
+    # from the header, to whichever image edge the sticker side faces.
+    if p.x < 0.5:
+        x0, x1 = 0.0, p.x + p.w
+    else:
+        x0, x1 = p.x, 1.0
+    return Rect(x0, 0.0, x1 - x0, grid.y)
 
 
 def detect_template(img, filename: str | None = None) -> str:
