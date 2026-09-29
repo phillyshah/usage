@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-09-25.
+Last updated: 2026-09-29.
 
 ---
 
@@ -16,13 +16,13 @@ Last updated: 2026-09-25.
 
 | | |
 |---|---|
-| Version in `main` | **2.15.1** (PR #44 merged); **2.16.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.15.1** — confirmed live 2026-09-25 |
+| Version in `main` | **2.16.0** (PR #45); **2.17.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.16.0** |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 315 passed, 2 skipped |
+| Tests | 323 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -32,7 +32,31 @@ PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
 
 ## Open threads
 
-**1. `detect_template()` still guesses, and the redaction gate trusts the guess.**
+**1. The patient mask does not cover every layout. DEFERRED BY THE USER, 2026-09-29.**
+Raised with evidence and consciously deprioritised in favour of extraction work;
+recorded here so it is not lost. What is known:
+
+- Tickets whose sticker runs past `grid_region.y` (0.26) keep `Sex`, `MRN` and
+  `Physician` visible **below** the mask. Confirmed on three real tickets in one
+  PDF; the name and DOB rows are covered, the bottom rows are not.
+- A Northside Hospital "Special Purchase Request" puts patient details at top
+  **left**; an Orthopedics ticket masks the right, so nothing is covered.
+- A ticket photographed at an angle on an instrument tray, and one scanned
+  rotated 90°, put the form somewhere other than the frame, which makes every
+  fractional coordinate meaningless.
+
+The root cause is not the rectangle's size. It is that the pipeline assumes the
+**form fills the frame in a fixed orientation**, and photographs do not. The fix
+is to locate and deskew the form first, then find the sticker inside it, and to
+make the gate genuinely fail safe: `located` has never once returned False in
+production, so the spec's "route to manual queue" path has never run. That is a
+behavioural change with real review-volume cost, which is why it is a decision
+and not a patch.
+
+Two of the five example images were never saved to disk, so a detector cannot be
+built or tested against them yet. Ask for them as files before starting.
+
+**2. `detect_template()` still guesses, and the redaction gate trusts the guess.**
 With no filename evidence, it returns `Maxx Orthopedics` as a *guess*
 (`app/pipeline/template.py`), and `redact_patient_region` treats that as fact.
 The spec says an unknown template must route to manual queue; that path is
@@ -41,14 +65,14 @@ recognised) so this should rarely fire, but an oddly-named upload still gets
 masked on a coin flip. The honest fix routes those to manual queue, which costs
 review volume — deliberately left as a decision, not made unilaterally.
 
-**2. Already-stored Maxx Health images were never re-masked.**
+**3. Already-stored Maxx Health images were never re-masked.**
 Anything ingested *before* the 2.12.2 deploy (2026-09-23) under an `MH*` filename
 has a *visible* patient sticker in the `redacted-images` bucket (see the 2.12.2
 entry below). MH tickets ingested from that deploy onward mask correctly. Bounded
 by the 14-day retention, so the last affected image ages out around **2026-10-07**;
 re-uploading those tickets re-masks them sooner. No decision recorded either way.
 
-**3. The two price-list tabs have opposite shapes, and neither is dense.**
+**4. The two price-list tabs have opposite shapes, and neither is dense.**
 Measured against the real `Hospital_Price_List-2.xlsx` (2,459 rows after the
 aggregate column is dropped) and the 479 hospitals in `reference/surgeon_info.csv`:
 
@@ -80,14 +104,14 @@ deliberately still a code dict; the run summary lists every unmatched and
 ambiguous hospital, so the loop is to run it and feed back the names that
 actually appear on tickets.
 
-**4. Confidence baseline after the effort drop.
+**5. Confidence baseline after the effort drop.
 Extraction moved from effort `high` (the unset default) to `medium` in 2.12.1.
 The regression signal is `pct_confident` in History → "Getting better over time",
 which is a per-day series — so the pre-2026-09-20 days *are* the baseline and can
 be read retroactively. If it sags over a week of real tickets, put `vision.py`
 back to `high`; it's a one-line change.
 
-**5. Verify `Inits` on a real Maxx Health ticket.** — *not yet done*
+**6. Verify `Inits` on a real Maxx Health ticket.** — *not yet done*
 Before 2.12.2 this came back blank on every MH ticket (wrong region cropped).
 2.12.2 is live, so it's unblocked: one Debug Console run against an MH ticket
 confirms both halves at once — the right region masked in the stored image, and
@@ -96,6 +120,30 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### A ticket has two kinds of line, and only one of them has a label
+
+The right-hand column carries peel-off implant labels with barcodes. The left
+carries pins, screws and instruments **written onto the form's own Ref #/
+Description/Price blanks**, with no label at all. All three layers of the
+pipeline assumed only the first kind existed:
+
+1. the prompt said "for each *device label*" and never mentioned the blanks;
+2. `align_vision_lines` returns one entry **per label**, so with five barcodes
+   and eight vision lines the three handwritten ones were discarded before
+   assembly saw them — the aligner's own docstring describes padding for exactly
+   this case, it just never happened;
+3. their part numbers are not in `reference_part_info` and never will be
+   reliably, because disposables trail the implant master.
+
+The ticket's own arithmetic is the giveaway: implants summed to $6,490 against a
+circled $6,665, and the missing $175 was three pin lines. Labels are now padded
+to the vision line count, a handwritten line keeps the description written on the
+form, and an unknown part number is no longer fatal.
+
+**The quantity convention differs too.** `(x2) 25ea` against a `Price: $50.00`
+box means two items at $25 — the box holds the LINE total, not the unit price.
+Reading 50 as the unit price doubles the line and breaks the reconciliation.
 
 ### What a reviewed step-5 workbook is allowed to teach
 
@@ -426,6 +474,20 @@ surfaces `cache_read_input_tokens`.
 
 ## What shipped
 
+### 2.17.0 — Handwritten lines, and a mask that ate the header
+Three defects found on the first real ticket photographs. Handwritten line items
+were dropped by all three layers of the pipeline (see "Decisions"); `(x2) 25ea`
+was being read as a unit price rather than a line total; and part numbers absent
+from the master killed the line instead of falling back to the written
+description.
+
+Separately, the patient mask's fixed left edge at 0.55w was cutting through
+`Surgery Date` and `Surgeon` — on one layout it clipped the year off `9/28/26`,
+on another it took half the surgeon's name. The mask edge now snaps to the form's
+own printed gutter rule (0.58w–0.65w depending on layout), which recovers both
+fields and still covers the sticker. That is an extraction fix; the wider mask
+coverage problem is open thread 1.
+
 ### 2.16.0 — A reviewed step-5 workbook teaches the next extraction
 Send a priced spreadsheet back through step 4 and the prices are learned against
 (part, hospital), so the next batch arrives with those cells already filled.
@@ -535,6 +597,11 @@ applied during extraction, same-hospital price fill, and a price sanity ceiling.
 
 ## Ops gotchas
 
+- **`scripts/purge_redacted_images.py` deletes stored ticket images.** Images
+  masked by the pre-2.17.0 region may show patient details the mask missed;
+  re-masking cannot help, because the stored copy is already the masked one.
+  Dry-runs by default, `--delete` to act, `--before YYYY-MM-DD` to scope it.
+  Extraction results and learned facts are untouched.
 - **`db/12_price_learning.sql` must run before 2.16.0 deploys.** It adds
   `learning_price.source` and `pricing_runs.cells`, both additive with no data
   change. Without it the price harvest fails and step 4 loses the new behaviour.

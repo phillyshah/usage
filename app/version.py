@@ -5,9 +5,28 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.16.0"
+VERSION = "2.17.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.17.0",
+        "date": "2026-09-29",
+        "notes": [
+            "Handwritten lines are no longer dropped. Pins, screws and "
+            "instruments written straight onto the form — rather than carrying "
+            "a peel-off label — were being discarded entirely. On one real "
+            "ticket that was three lines and $175 of a $6,665 total",
+            "A handwritten '(x2) 25ea' against a '$50.00' price box is now read "
+            "as two items at $25, not one at $50",
+            "Part numbers the reference tables have never seen are kept, using "
+            "the description written on the form. Disposables will always trail "
+            "the implant master, and losing the line is worse than not knowing "
+            "its catalogue entry",
+            "The patient mask no longer covers the Surgery Date and Surgeon. It "
+            "was cutting through both on some ticket layouts, which is why "
+            "those fields kept coming back blank or half-read",
+        ],
+    },
     {
         "version": "2.16.0",
         "date": "2026-09-25",

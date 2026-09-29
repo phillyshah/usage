@@ -32,7 +32,7 @@ Shape:
     "hospital": {...}, "surgery_date": {...}, "po_number": {...}
   },
   "lines": [ {"index": <int>, "ref": {...}, "lot": {...}, "qty": {...},
-             "unit_price": {...}, "wasted": {...}} ],
+             "unit_price": {...}, "wasted": {...}, "description": {...}} ],
   "freight": {...},
   "grand_total": {...}
 }
@@ -58,7 +58,29 @@ For each device label, read the PRINTED catalogue/reference number and lot:
     "x4", "Qty 4" — common for unlabeled items like "4 pins"). Return an integer.
     Return null when no count is written (the line is a single unit).
 Read these from the printed label text even when a barcode is present. Do NOT
-provide a description — that is looked up separately from the reference tables.
+provide a description for a label line — it is looked up from the reference
+tables.
+
+HANDWRITTEN LINES. Not every line has a label. The form has its own blank
+"Ref #", "Lot #", "Description" and "Price" fields, and non-implant items —
+pins, screws, instruments, disposables — are written into them by hand. These
+are real billable lines and MUST be returned, in the same "lines" array, after
+the labelled ones. They are easy to miss because nothing is stuck to the page;
+look for handwriting on the form's own ruled blanks.
+  - "ref": the handwritten Ref # exactly as written, e.g. "MF-DHXX00D",
+    "MF-DAXX00F". Keep the letters as written — an "XX" in the middle is part of
+    the real catalogue number, not a placeholder.
+  - "description": for THESE lines only, return the handwritten description
+    (e.g. "short headed pins", "threaded pins"). Omit any quantity or unit price
+    from it. These parts are often absent from the reference tables, so the
+    written words are the only description there will ever be.
+  - "qty" and "unit_price": the count and the per-item price. They are usually
+    written together in the description area as "(x2) 25ea" — meaning 2 items at
+    25 each — while the figure in the "Price" box is the LINE TOTAL for all of
+    them. So "(x2) 25ea" with "Price: $50.00" is qty 2 and unit_price 25, NOT
+    unit_price 50. If only a line total and a count are given, divide. If no
+    count is written, qty is null and unit_price is the price as written.
+  - "lot": whatever is written on the Lot # blank, usually null.
 
 Price rules (these are handwritten and the most important figures on the ticket):
   - Return the numeric amount only: no "$", no commas, no words. "$1,900.00" -> 1900,
@@ -87,8 +109,13 @@ earlier label. For these lines:
   - "wasted": false unless a "W" or "I/O" is marked.
   - "qty": null unless a count is written.
 
-Dates as ISO YYYY-MM-DD. "lines" is ordered top-to-bottom (main implant labels
-first, secondary partner labels appended at the end).
+Dates as ISO YYYY-MM-DD. "lines" is ordered top-to-bottom: labelled implant
+lines first, then secondary partner labels, then handwritten form lines.
+
+The grand total is the sum of every line INCLUDING the handwritten ones, so if
+your line prices do not reconcile with it, the usual cause is a handwritten line
+that was not read. "description" is null on every line except the handwritten
+ones.
 """
 
 _EMPTY = {

@@ -172,6 +172,18 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         if lbl.get("gtin") and not lbl.get("ref"):
             grow = db.sku_for_gtin(lbl["gtin"])
             lbl["_sku"] = (grow or {}).get("sku") or db.ref_for_gtin(lbl["gtin"])
+    # align_vision_lines returns one entry PER LABEL, so any vision line beyond
+    # the barcode count is discarded. That silently lost every handwritten line:
+    # a ticket with five implant labels and three hand-written pin lines came
+    # back with five rows, and the three pin lines — real billable items, $175
+    # of a $6,665 ticket — never reached the workbook at all.
+    #
+    # Padding gives each vision line a slot. An empty label carries no ref, lot
+    # or gtin, so it never content-matches in passes 1 and 2 and the extra lines
+    # land on the padded slots in order, which is exactly what align.py's
+    # docstring describes.
+    if len(vlines) > len(labels):
+        labels = list(labels) + [{} for _ in range(len(vlines) - len(labels))]
     vlines = align_vision_lines(labels, vlines)
 
     # ---- ticket header fields ----
@@ -261,6 +273,17 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
 
         part = resolve_part(ref_in, label.get("gtin"), lot_in)
         wasted = _is_wasted(vline)
+
+        # A handwritten line carries its own description, and usually a part
+        # number the masters have never heard of — pins, screws, instruments and
+        # other disposables trail the implant master permanently. Requiring a
+        # master match would drop them, and they are real money: three pin lines
+        # on one real ticket accounted for $175 of a $6,665 total, and dropping
+        # them is exactly the gap the grand-total reconciliation then reports.
+        hand_desc = _v(vline.get("description"))
+        if hand_desc and not part.get("description"):
+            part["description"] = str(hand_desc).strip()
+            part["desc_source"] = "handwritten"
 
         # Quantity is 1 per labeled physical unit, but when a count is written on
         # the ticket (e.g. "4 pins" for an unlabeled item) we honor it.
@@ -354,6 +377,8 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             ref_conf = "medium" if part.get("ref_source") in ("gtin", "gtin_learned") else "low"
             # A description recovered from a correction / the Expiry Log is a
             # real value (worth showing) but not master-confirmed -> medium.
+            # One read off the operator's own handwriting is worth showing too,
+            # but it is a read of handwriting, so it stays amber for review.
             desc_conf = "medium" if part.get("description") else "low"
         else:
             ref_conf = desc_conf = "low"
