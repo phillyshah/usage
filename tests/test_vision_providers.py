@@ -77,11 +77,13 @@ class _Router:
 # ---------------------------------------------------------------------------
 # Configuration: a reason, not an exception, and the right variable names
 # ---------------------------------------------------------------------------
-def test_the_default_provider_is_anthropic():
-    """An existing deployment that sets nothing must behave exactly as it did."""
+def test_openrouter_is_the_default_provider():
+    """Flipped once the open-weight model was shown to read these tickets well:
+    roughly a tenth of the cost, and a spend cap on the other account is what
+    stopped a day's work once already."""
     from app.config import Settings
 
-    assert Settings(_env_file=None).vision_provider == "anthropic"
+    assert Settings(_env_file=None).vision_provider == "openrouter"
 
 
 def test_an_unknown_provider_falls_back_to_anthropic():

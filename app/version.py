@@ -5,9 +5,58 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.22.0"
+VERSION = "2.25.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.25.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Tickets are now read twice when it's worth it. The cheaper model "
+            "reads everything; any ticket left with an empty Price, Surgeon, "
+            "Hospital or Date is re-read by Claude Opus, which is the best "
+            "reader available",
+            "That only happens where there's a real gap, so the cost follows "
+            "how often the first reader struggles rather than how many tickets "
+            "you upload — cheaper than reading everything with Claude, and "
+            "more accurate than reading everything with the cheaper model",
+            "The ticket says when it was re-read and which cells prompted it, "
+            "and says so too when the second read couldn't fill them either",
+        ],
+    },
+    {
+        "version": "2.24.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Far better at finding the barcodes, especially on forms that "
+            "aren't the Maxx ticket. A distributor's own form that produced "
+            "nothing at all now reads three of its four stickers, and a normal "
+            "Maxx ticket that was quietly losing one now reads all four",
+            "PDFs are rendered at higher resolution before anything reads "
+            "them. A barcode that was too small to decode can't be recovered "
+            "afterwards, so it has to be rendered large in the first place",
+            "The picture sent to the AI is scaled down separately. It reads "
+            "the same either way, so there was no reason to be paying to "
+            "upload a much bigger one",
+        ],
+    },
+    {
+        "version": "2.23.0",
+        "date": "2026-09-30",
+        "notes": [
+            "The Debug Console now accepts PDFs. It never did — it handed the "
+            "PDF straight to the image reader, which cannot open one, and then "
+            "blamed the photo. A perfectly clear ticket was being reported as "
+            "unreadable",
+            "When a ticket does go to the manual queue, the console now says "
+            "what actually went wrong instead of blaming a patient region that "
+            "hasn't existed since 2.19.0",
+            "'What you keep having to fix' now looks at the last 14 days "
+            "rather than 90. The reader and the extraction changed a great "
+            "deal this week, and a 90-day window averages today's tool "
+            "together with a materially different one",
+        ],
+    },
     {
         "version": "2.22.0",
         "date": "2026-09-30",

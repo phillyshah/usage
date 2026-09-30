@@ -19,7 +19,7 @@ Last updated: 2026-09-30.
 | Version in `main` | **2.21.0** (PR #50); **2.22.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
-| Reader | `VISION_PROVIDER` — `anthropic` (default) or `openrouter` from 2.21.0 |
+| Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**, with Claude Opus as the escalation reader for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | `claude-sonnet-5-5` from 2.20.0 — **but the VPS `.env` pins `ANTHROPIC_MODEL` and wins**, so the move needs an `.env` edit as well as a pull |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |

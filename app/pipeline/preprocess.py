@@ -37,6 +37,33 @@ def encode_image(img, ext: str = ".jpg") -> bytes:
     return buf.tobytes() if ok else b""
 
 
+# What the vision models actually use. Every one of them downsamples a large
+# image server-side before looking at it, so uploading a 15 MP page buys no
+# accuracy — it buys upload time and, on some providers, tokens. Barcodes are
+# the opposite: they need every pixel we can give them. One stored image now
+# serves both, at full resolution, and this caps only the copy sent to the
+# model.
+VISION_MAX_EDGE = 1600
+
+
+def for_vision(img, ext: str = ".jpg") -> bytes:
+    """The image as the model should receive it: long edge capped, re-encoded.
+
+    Never upscales — a small photo is sent as-is.
+    """
+    if img is None:
+        return b""
+    h, w = img.shape[:2]
+    longest = max(h, w)
+    if longest > VISION_MAX_EDGE:
+        import cv2
+
+        scale = VISION_MAX_EDGE / float(longest)
+        img = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))),
+                         interpolation=cv2.INTER_AREA)
+    return encode_image(img, ext)
+
+
 def _deskew(gray):
     """Estimate dominant text skew via minAreaRect over thresholded ink."""
     thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]

@@ -123,11 +123,28 @@ def process_ticket(ticket: dict) -> dict:
     # Deterministic first: decode device labels from the grid region. Junk
     # payloads (e.g. a patient wristband barcode) are filtered out before the
     # vision merge so they can't occupy a line slot or shift the pairing.
-    grid = _grid_crop(img, template)
-    labels = barcode.drop_junk_labels(barcode.decode_region(grid)) if grid is not None else []
+    # Two passes, pooled. The grid crop is tuned to the Maxx ticket and a
+    # distributor's own form puts its stickers somewhere else entirely — but the
+    # crop is not simply worse: cropping raises the effective resolution of what
+    # the decoder sees, so on a big page it finds codes a whole-page pass misses,
+    # and on a differently-laid-out form it misses codes the whole page finds.
+    # Measured on real files, neither region dominates, so both run.
+    labels = []
+    if img is not None:
+        grid = _grid_crop(img, template)
+        labels = barcode.drop_junk_labels(barcode.merge_labels(
+            barcode.decode_region(grid) if grid is not None else [],
+            barcode.decode_region(img),
+        ))
 
     # The vision read: header, prices, qty, totals. One call per ticket.
-    vresult = vision.extract_handwritten(image_bytes)
+    #
+    # A capped copy, not the stored bytes. Barcodes above got the image at full
+    # resolution because they need every pixel; every vision provider
+    # downsamples a large image server-side before looking at it, so sending
+    # the full page buys no accuracy and costs upload time and tokens.
+    vision_bytes = preprocess.for_vision(img) if img is not None else image_bytes
+    vresult = vision.extract_handwritten(vision_bytes)
 
     # If vision returned more priced lines than decoded labels, pad with empty
     # label dicts so vision-only lines still appear (barcode failed on those).
@@ -136,7 +153,60 @@ def process_ticket(ticket: dict) -> dict:
         labels.append({"gtin": None, "lot": None, "expiry": None, "mfg": None, "serial": None, "raw": None, "decoded": False, "ref": None})
 
     summary = assemble.assemble_and_persist(ticket, vresult, labels)
+
+    # A second, stronger read — but only for tickets the first one left with a
+    # real gap. Escalating everything would cost more than never having
+    # switched provider; escalating nothing leaves the cheap model's misses in
+    # the deliverable. Cost therefore tracks the failure rate, not the volume.
+    #
+    # Deliberately AFTER assembly, not before: the suggestion layer fills a
+    # good number of blanks on its own (a learned price, the hospital from the
+    # surgeon record, a figure the grand total determines). Escalating before
+    # it ran would pay Claude to re-read tickets that were about to fix
+    # themselves.
+    gaps = _unresolved_fields(summary["ticket_id"])
+    if gaps:
+        cfg, why = vision.escalation_configuration()
+        if cfg is None:
+            log.info("ticket %s has gaps in %s but escalation is unavailable: %s",
+                     ticket_id, sorted(gaps), why)
+        else:
+            log.info("ticket %s: re-reading with %s because %s came back empty",
+                     ticket_id, cfg["model"], sorted(gaps))
+            second = vision.extract_handwritten(vision_bytes, escalate=True)
+            if second.get("error"):
+                log.warning("second read failed for %s: %s", ticket_id, second["error"])
+            else:
+                merged = vision.merge_reads(vresult, second)
+                summary = assemble.assemble_and_persist(ticket, merged, labels)
+                still = _unresolved_fields(summary["ticket_id"])
+                db.update_ticket(ticket_id, {"flags": (summary.get("flags") or []) + [
+                    f"Re-read by {cfg['model']} because "
+                    f"{', '.join(sorted(gaps))} came back empty"
+                    + (f"; {', '.join(sorted(still))} still empty" if still
+                       else " — it filled them in")
+                ]})
+                summary["escalated_to"] = cfg["model"]
     return summary
+
+
+def _unresolved_fields(ticket_id: str) -> set[str]:
+    """Which cells worth paying for came back with nothing to suggest.
+
+    Red, not amber: amber means the tool has a candidate and a human confirms
+    it, which is already cheap. Red means nobody has anything, and that is the
+    only state a second reader can improve on.
+    """
+    wanted = vision.escalate_fields()
+    if not wanted:
+        return set()
+    cmap = assemble.confidence_map_for_ticket(ticket_id)
+    out = {f for f, c in (cmap.get("header") or {}).items()
+           if f in wanted and c == "low"}
+    for per_line in (cmap.get("lines") or {}).values():
+        out |= {f for f, c in (per_line or {}).items()
+                if f in wanted and c == "low"}
+    return out
 
 
 def _safe_process(ticket: dict, attempts: int = 4) -> dict:

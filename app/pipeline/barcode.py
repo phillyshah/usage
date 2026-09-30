@@ -126,6 +126,10 @@ def _parse_maxx_gs1(raw: str) -> dict | None:
     return fields
 
 
+# Decoder settings to fall back through when the first pass finds nothing.
+_SHRINK_LADDER = (1, 2, 3)
+
+
 def _raw_payloads(crop) -> list[str]:
     """Return all decoded raw strings from an image region.
 
@@ -138,17 +142,33 @@ def _raw_payloads(crop) -> list[str]:
     if crop is None:
         return out
     if _HAS_DMTX:
+        shape = getattr(crop, "shape", None)
+        px = (shape[0] * shape[1]) if shape else 0
+        if px > 4_000_000:
+            shrink, timeout = 2, 12000
+        else:
+            shrink, timeout = 1, 3000
         try:
-            shape = getattr(crop, "shape", None)
-            px = (shape[0] * shape[1]) if shape else 0
-            if px > 4_000_000:
-                shrink, timeout = 2, 12000
-            else:
-                shrink, timeout = 1, 3000
             for r in pylibdmtx.decode(crop, timeout=timeout, shrink=shrink, max_count=40):
                 out.append(r.data.decode("utf-8", "replace"))
         except Exception:
             pass
+        # Nothing at the size-appropriate setting? Try the others before giving
+        # up. `shrink` changes how many pixels the decoder sees per module, and
+        # measuring a real distributor form showed codes on ONE page decoding at
+        # different settings and at none in common — so a single pass is a coin
+        # toss on an awkward scan. Only on a miss, because these passes are the
+        # expensive ones and a page that already decoded does not need them.
+        if not out:
+            for alt in (s for s in _SHRINK_LADDER if s != shrink):
+                try:
+                    for r in pylibdmtx.decode(crop, timeout=timeout, shrink=alt,
+                                              max_count=40):
+                        out.append(r.data.decode("utf-8", "replace"))
+                except Exception:
+                    pass
+                if out:
+                    break
     if _HAS_ZBAR:
         try:
             for r in pyzbar.decode(crop):
@@ -280,6 +300,32 @@ def decode_region(grid_img) -> list[dict]:
         ]},
     )
     return results
+
+
+def merge_labels(*label_lists: list[dict]) -> list[dict]:
+    """Union several decode passes, keeping the first sighting of each label.
+
+    Two passes over one page disagree more than you would expect. Measured on
+    real files: the ticket's fixed grid crop found three of four codes on a Maxx
+    ticket while a whole-page pass found all four, and on a distributor's own
+    form the crop found two that the whole page missed and vice versa. Neither
+    region wins, so both run and the results are pooled.
+
+    Identity is (GTIN, lot) — the same physical label decoded twice, once per
+    pass, must not become two lines. Falls back to the raw payload for anything
+    that carried no GS1 data.
+    """
+    out: list[dict] = []
+    seen: set = set()
+    for labels in label_lists:
+        for lbl in labels or []:
+            key = (lbl.get("gtin"), lbl.get("lot")) if lbl.get("gtin") or lbl.get("lot") \
+                else ("raw", lbl.get("raw"))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(lbl)
+    return out
 
 
 def drop_junk_labels(labels: list[dict]) -> list[dict]:

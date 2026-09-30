@@ -173,7 +173,7 @@ export const api = {
    * GET /metrics/accuracy?days=N
    * -> {total, silent, silent_rate, by_confidence, by_field:[...]}
    */
-  accuracyMetrics(days = 90) {
+  accuracyMetrics(days = 14) {
     return request(`/metrics/accuracy?days=${encodeURIComponent(days)}`, {
       method: "GET",
     });
