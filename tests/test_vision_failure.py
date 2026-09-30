@@ -165,3 +165,140 @@ def test_the_status_email_counts_unread_tickets():
     subject, text, _ = render(status)
     assert "COULD NOT BE READ" in subject
     assert "Could not be read: 9" in text
+
+
+# ---------------------------------------------------------------------------
+# Preflight: find a broken configuration in seconds, not in nine tickets
+# ---------------------------------------------------------------------------
+def test_check_connection_reports_the_exact_error():
+    """The error text is the diagnosis — it must not be paraphrased away."""
+    a, b, c = _live(_client(raises=Exception("model: claude-nope not found")))
+    with a, b, c:
+        result = vision.check_connection()
+    assert result["ok"] is False
+    assert "claude-nope not found" in result["error"]
+
+
+def test_check_connection_sends_the_same_parameters_as_a_real_extraction():
+    """If it sent a different shape it could not catch a rejected parameter,
+    which is the only reason it exists."""
+    client = _client(text="ok")
+    a, b, c = _live(client)
+    with a, b, c:
+        vision.check_connection()
+    probe = client.messages.create.call_args.kwargs
+
+    real = _client(text='{"header": {}, "lines": [], "freight": null, "grand_total": null}')
+    d, e, f = _live(real)
+    with d, e, f:
+        vision.extract_handwritten(b"jpegbytes")
+    live = real.messages.create.call_args.kwargs
+
+    for key in ("model", "thinking", "output_config"):
+        assert probe[key] == live[key], f"preflight drifted from the real call on {key!r}"
+
+
+def test_check_connection_passes_when_the_api_answers():
+    a, b, c = _live(_client(text="ok"))
+    with a, b, c:
+        result = vision.check_connection()
+    assert result["ok"] is True and result["error"] is None
+
+
+def test_offline_mode_needs_no_connection():
+    with patch.object(vision.settings, "offline_mode", True):
+        assert vision.check_connection()["ok"] is True
+
+
+def test_a_missing_key_fails_the_check_without_calling_out():
+    client = _client(text="ok")
+    with patch.object(vision.settings, "offline_mode", False), \
+         patch.object(vision.settings, "anthropic_api_key", ""):
+        result = vision.check_connection()
+    assert result["ok"] is False
+    client.messages.create.assert_not_called()
+
+
+def test_a_refusal_is_reported_as_a_refusal_not_as_bad_json():
+    """A declined request is HTTP 200 with no text. Reported as "unparseable"
+    it would send the next person hunting in the wrong place."""
+    client = _client(text="", stop_reason="refusal")
+    client.messages.create.return_value.stop_details = MagicMock(category="cyber")
+    result = _extract(client)
+    assert "declined" in result["error"] and "cyber" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# A batch that cannot read anything does not consume the tickets
+# ---------------------------------------------------------------------------
+def test_a_failed_preflight_aborts_the_batch_and_touches_nothing():
+    import app.pipeline.run as run
+
+    batch = db.create_batch()
+    t = db.create_ticket({"batch_id": batch["id"], "source_filename": "MO-abort.jpg",
+                          "status": "pending_review"})
+    with patch.object(run.settings, "anthropic_api_key", "sk-test"), \
+         patch.object(run.settings, "offline_mode", False), \
+         patch.object(run.vision, "check_connection",
+                      return_value={"ok": False, "model": "m", "error": "BadRequestError: 400"}), \
+         pytest.raises(run.VisionUnavailable) as caught:
+        run.run_batch(batch["id"])
+
+    assert "400" in str(caught.value), "the reason must survive to the caller"
+    # Untouched: a re-run after the fix picks the ticket up exactly as it was.
+    assert db.get_ticket(t["ticket_id"])["status"] == "pending_review"
+    assert not db.lines_for_ticket(t["ticket_id"])
+
+
+def test_offline_mode_never_preflights():
+    import app.pipeline.run as run
+
+    batch = db.create_batch()
+    with patch.object(run.settings, "offline_mode", True), \
+         patch.object(run.vision, "check_connection") as probe:
+        run.run_batch(batch["id"])
+    probe.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# The route. This is the layer that shipped a dead branch: the 503 carried a
+# dict `detail`, api.js only unwraps a string one, so the browser saw a bare
+# "503 Service Unavailable" and the UI offered "try again" — the one piece of
+# advice that cannot help with a misconfiguration.
+# ---------------------------------------------------------------------------
+def test_an_unreachable_reader_returns_503_with_a_readable_string_reason():
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    import app.pipeline.run as run
+
+    batch = db.create_batch()
+    t = db.create_ticket({"batch_id": batch["id"], "source_filename": "MO-503.jpg",
+                          "status": "pending_review"})
+
+    with patch.object(run.settings, "anthropic_api_key", "sk-test"), \
+         patch.object(run.settings, "offline_mode", False), \
+         patch.object(run.vision, "check_connection", return_value={
+             "ok": False, "model": "m",
+             "error": "BadRequestError: thinking.budget_tokens is not supported"}):
+        resp = TestClient(main.app).post("/batches/run", json={"batch_id": batch["id"]})
+
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    # A STRING, or api.js drops it and the reason never reaches anyone.
+    assert isinstance(detail, str), "api.js only unwraps a string `detail`"
+    assert "budget_tokens" in detail, "the reason has to survive to the browser"
+    assert "nothing was processed" in detail.lower()
+    # And the ticket is genuinely untouched, as the message promises.
+    assert db.get_ticket(t["ticket_id"])["status"] == "pending_review"
+
+
+def test_health_vision_reports_the_check():
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+
+    with patch("app.pipeline.vision.check_connection",
+               return_value={"ok": False, "model": "m", "error": "nope"}):
+        body = TestClient(main.app).get("/health/vision").json()
+    assert body == {"ok": False, "model": "m", "error": "nope"}

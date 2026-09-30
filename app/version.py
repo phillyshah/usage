@@ -5,9 +5,28 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.19.0"
+VERSION = "2.20.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.20.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Fixes the 'tickets couldn't be read' error. The 2.19.0 build sent "
+            "the AI reader a setting it rejects, so every ticket failed. That "
+            "was our mistake, introduced by the previous fix",
+            "New 'Test AI connection' button next to Extract data. It makes one "
+            "small call and tells you in a few seconds whether the reader is "
+            "working — you no longer have to run a whole batch to find out",
+            "If the reader can't be reached, extraction now stops before it "
+            "starts instead of working through every ticket and handing back a "
+            "spreadsheet with nothing but barcode data. Your tickets stay "
+            "exactly where they were, so a re-run picks them up untouched",
+            "Moved to the current version of the AI model — same cost, better "
+            "at reading handwriting — and it now reads each ticket more "
+            "carefully than before",
+        ],
+    },
     {
         "version": "2.19.0",
         "date": "2026-09-30",

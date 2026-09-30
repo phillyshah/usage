@@ -100,6 +100,19 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/health/vision")
+def health_vision():
+    """Can we actually reach the model? One small live call.
+
+    Separate from /health, which only says the web process is up — and a web
+    process that is up while every extraction is rejected is exactly the state
+    this app has been in twice.
+    """
+    from app.pipeline import vision
+
+    return vision.check_connection()
+
+
 @app.get("/version")
 def version():
     return {"version": VERSION, "changelog": CHANGELOG}
@@ -225,9 +238,24 @@ async def upload_images(files: list[UploadFile] = File(...)):
 # ---------------------------------------------------------------------------
 @app.post("/batches/run")
 def batches_run(payload: dict | None = Body(default=None)):
+    from app.pipeline.run import VisionUnavailable
+
     batch_id = (payload or {}).get("batch_id") if payload else None
-    result = run_batch(batch_id)
-    return result
+    try:
+        return run_batch(batch_id)
+    except VisionUnavailable as e:
+        # 503, and `detail` must be a STRING: api.js only unwraps a server
+        # message when it is one, so a dict here reaches the browser as a bare
+        # "503 Service Unavailable" and the UI falls back to "try again" — the
+        # one piece of advice that cannot help with a misconfiguration.
+        #
+        # Nothing was processed and the tickets are untouched, so a re-run once
+        # the configuration is fixed picks them up exactly as they were.
+        return JSONResponse(
+            {"detail": f"The AI reader could not be reached, so nothing was "
+                       f"processed: {e}"},
+            status_code=503,
+        )
 
 
 @app.get("/batches")

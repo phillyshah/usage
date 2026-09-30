@@ -193,6 +193,60 @@ def _parse(text: str, stop_reason: str | None = None) -> dict:
         return _empty(error=f"unparseable response: {e}")
 
 
+def _request_params() -> dict:
+    """The model/thinking/effort parameters, in ONE place.
+
+    The preflight below has to send exactly what the real extraction sends, or
+    it cannot catch a parameter the API rejects — which is the only reason it
+    exists. Two copies of this dict would drift, and the drift would be
+    invisible until a batch failed.
+    """
+    return {
+        "model": settings.anthropic_model,
+        # Adaptive is the ONLY on-mode for this model family. A fixed
+        # `{"type": "enabled", "budget_tokens": N}` budget is rejected with a
+        # 400 — that shipped once and every call failed for a whole release.
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+    }
+
+
+def check_connection() -> dict:
+    """Can we actually talk to the model? Returns {ok, model, error}.
+
+    One small call that constructs the client and sends the same parameter
+    shape as a real extraction. A malformed request is rejected before any
+    generation happens, so this costs almost nothing and answers in seconds.
+
+    It exists because this call has now failed twice at the boundary between
+    our process and the API — once on a token cap, once on a parameter the
+    model rejects — and neither was visible from inside the process. A mocked
+    test suite cannot validate an API contract; only a real call can. The error
+    string is passed through verbatim, because the exact text is the diagnosis.
+    """
+    if settings.offline_mode:
+        return {"ok": True, "model": None,
+                "error": None, "detail": "offline mode — the AI reader is not used"}
+    if not settings.anthropic_api_key:
+        return {"ok": False, "model": settings.anthropic_model,
+                "error": "no Anthropic API key configured"}
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        client.messages.create(
+            max_tokens=1024,
+            timeout=30.0,
+            messages=[{"role": "user", "content": "Reply with the word: ok"}],
+            **_request_params(),
+        )
+        return {"ok": True, "model": settings.anthropic_model, "error": None}
+    except Exception as e:
+        log.error("vision connection check failed: %s", e)
+        return {"ok": False, "model": settings.anthropic_model,
+                "error": f"{type(e).__name__}: {e}"}
+
+
 def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg") -> dict:
     """Single Claude call. Returns the JSON-parsed per-field result.
 
@@ -230,22 +284,17 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         b64 = base64.standard_b64encode(redacted_img_bytes).decode("ascii")
         resp = client.messages.create(
-            model=settings.anthropic_model,
-            # max_tokens covers thinking AND output together. Adaptive thinking
-            # with an 8000 cap is what is believed to have emptied a whole batch:
-            # a longer system prompt bought longer deliberation, the JSON was cut
-            # off mid-object, and the parser turned that into an empty result. A
-            # fixed budget cannot expand to crowd the answer out, and 16000 - 4000
-            # leaves far more room for the JSON than any ticket needs.
+            **_request_params(),
+            # max_tokens covers thinking AND output together, and an 8000 cap is
+            # what is believed to have emptied a whole batch: a longer system
+            # prompt bought longer deliberation, the JSON was cut off mid-object,
+            # and the parser turned that into an empty result. 16000 is the
+            # documented default for a non-streaming request and leaves far more
+            # room than any ticket needs.
             max_tokens=16000,
-            thinking={"type": "enabled", "budget_tokens": 4000},
             # A hung call otherwise holds one of the three batch workers for the
             # SDK default (10 minutes).
             timeout=180.0,
-            # Sonnet 5 defaults to "high" when effort is unset. "medium" is the
-            # cost/quality knob for the per-ticket read; watch the amber/red rate
-            # in History after changing it — that's the regression signal.
-            output_config={"effort": "medium"},
             # SYSTEM_PROMPT is static and identical on every call (one per ticket,
             # ~100/day) — cache it so repeat extractions reuse it at ~10% of the
             # input-token cost instead of reprocessing it each time.
@@ -278,7 +327,17 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
             block.text for block in resp.content if getattr(block, "type", None) == "text"
         )
         stop_reason = getattr(resp, "stop_reason", None)
-        result = _parse(text, stop_reason)
+        # A declined request comes back as HTTP 200 with no text, so it would
+        # otherwise fall through to the parser and be reported as "unparseable
+        # response" — true, but it would send the next person hunting in the
+        # wrong place. Say what actually happened.
+        if stop_reason == "refusal":
+            details = getattr(resp, "stop_details", None)
+            category = getattr(details, "category", None) or "unspecified"
+            log.error("vision request was declined (category=%s)", category)
+            result = _empty(error=f"request declined by the model ({category})")
+        else:
+            result = _parse(text, stop_reason)
         from app.pipeline import tracer
         line_count = len(result.get("lines") or [])
         err = result.get("error")

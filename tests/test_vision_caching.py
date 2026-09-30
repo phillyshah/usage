@@ -38,9 +38,8 @@ def test_system_prompt_sent_as_cache_control_block():
     assert system[0]["cache_control"] == {"type": "ephemeral"}
 
 
-def test_extraction_runs_at_medium_effort():
-    """Sonnet 5 defaults to "high" when effort is unset; the per-ticket read is
-    pinned to "medium" deliberately. Locked in so it can't drift back silently."""
+def _request_kwargs() -> dict:
+    """The kwargs extract_handwritten actually hands to messages.create."""
     fake_client = MagicMock()
     fake_client.messages.create.return_value = _fake_response()
 
@@ -49,8 +48,41 @@ def test_extraction_runs_at_medium_effort():
          patch("anthropic.Anthropic", return_value=fake_client):
         vision.extract_handwritten(b"fake-jpeg-bytes")
 
-    assert fake_client.messages.create.call_args.kwargs["output_config"] == {
-        "effort": "medium"}
+    return fake_client.messages.create.call_args.kwargs
+
+
+# ---------------------------------------------------------------------------
+# The request SHAPE. These exist because a whole release shipped a call that
+# was rejected with a 400 on every single ticket while 382 tests passed: a
+# mocked client accepts any keyword argument ever invented, so nothing here can
+# validate the contract. Only vision.check_connection(), against the real API,
+# can do that. What these CAN do is pin the shape we mean to send, and that is
+# enough to have caught the bug that cost a batch.
+# ---------------------------------------------------------------------------
+def test_thinking_is_adaptive_and_carries_no_token_budget():
+    """`{"type": "enabled", "budget_tokens": N}` is rejected outright by this
+    model family. Adaptive is the only on-mode; depth comes from effort."""
+    thinking = _request_kwargs()["thinking"]
+    assert thinking == {"type": "adaptive"}
+
+
+def test_no_token_budget_anywhere_in_the_request():
+    """Belt and braces: the 400 was worth a batch, so don't rely on one key."""
+    import json
+
+    assert "budget_tokens" not in json.dumps(_request_kwargs(), default=str)
+
+
+def test_extraction_runs_at_high_effort():
+    """Sonnet 5.5 recalibrated the effort levels, so the "medium" tuned against
+    Sonnet 5 no longer means what it did. Pinned so it can't drift silently."""
+    assert _request_kwargs()["output_config"] == {"effort": "high"}
+
+
+def test_max_tokens_leaves_room_for_the_answer():
+    """max_tokens covers thinking AND output. An 8000 cap is the best-supported
+    explanation for the batch that came back with nothing."""
+    assert _request_kwargs()["max_tokens"] >= 16000
 
 
 def test_cache_stats_recorded_in_trace():

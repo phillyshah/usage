@@ -8,6 +8,13 @@ re-litigating, and open threads.
 - **Repo path:** `/root/usage`
 - **Deploy command:** `cd ~/usage && git pull origin main && make deploy`
 - **Live URL:** https://usage.90ten.life
+- **`.env` beats the code.** `/root/usage/.env` pins `ANTHROPIC_MODEL`, so
+  changing the default in `app/config.py` moves nothing on the VPS. A model
+  change is a two-step deploy: edit `.env`, then pull and build.
+- **After any deploy that touches the vision call:** hit `/health/vision` (or
+  the "Test AI connection" button) before running a batch. A green test suite
+  says nothing about whether the API will accept the request — see the 2.20.0
+  entry in `docs/WORK_LOG.md`.
 
 ## Stack
 - FastAPI + vanilla JS SPA
