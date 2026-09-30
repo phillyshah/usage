@@ -1,11 +1,19 @@
-"""Claude vision fallback — handwriting, header fields, prices, totals, quantity.
+"""The vision read — handwriting, header fields, prices, totals, quantity.
 
-Single Claude call per ticket. The system prompt (verbatim from DEVELOPER_HANDOFF
-§7) instructs JSON-only output with per-field {value, confidence} and null for
-anything unreadable. We parse defensively: strip fences, json.loads, never trust
-prose. Model confidence is an INPUT to scoring, not the final cell colour.
+One call per ticket. The system prompt instructs JSON-only output with per-field
+{value, confidence} and null for anything unreadable. We parse defensively:
+strip fences, json.loads, never trust prose. Model confidence is an INPUT to
+scoring, not the final cell colour.
 
-If Anthropic isn't configured (OFFLINE_MODE / no key) this returns an empty,
+TWO PROVIDERS, ONE PIPELINE. `VISION_PROVIDER` selects Anthropic (the default,
+so a deployment that sets nothing behaves exactly as it did) or OpenRouter, for
+open-weight models at roughly a tenth of the cost. Only the transport differs:
+building the request and reading the answer are per-provider, and everything
+that took two outages to get right — the error marker, the truncation check, the
+retry classification, the trace — is shared. A second copy of that logic is a
+second place for a failure to go quiet.
+
+If no reader is configured (OFFLINE_MODE / no key) this returns an empty,
 well-formed result so the deterministic path still produces a sheet.
 
 Failures are never silent. Every empty result says why it is empty, because a
@@ -23,6 +31,82 @@ from app.config import settings
 from app.pipeline import transient
 
 log = logging.getLogger("pipeline.vision")
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# OUR TICKETS ARE NOT TRAINING DATA, and that is sent on every request rather
+# than assumed. OpenRouter is a ROUTER — it hands the request to one of several
+# upstream inference providers, and their policies differ. "deny" restricts
+# routing to providers that do not store prompts for training. Left unset it
+# defaults to "allow", so the safe answer is only true if it is written down.
+#
+# WHAT THIS DOES NOT COVER, and it is half the answer: OpenRouter's OWN logging
+# is an ACCOUNT setting (Settings -> Privacy), not a request field. No code here
+# can set it. That matters more for this app than for the dashboard this pattern
+# came from, because these requests carry the patient sticker — see the PHI note
+# in CLAUDE.md.
+#
+# A CONSTANT, NOT A SETTING. An env var that loosens this is a switch somebody
+# flips to make a failing model work and never flips back.
+OPENROUTER_PRIVACY = {"data_collection": "deny"}
+
+
+def _provider() -> str:
+    name = (settings.vision_provider or "").strip().lower()
+    return name if name in ("anthropic", "openrouter") else "anthropic"
+
+
+def _openrouter_models() -> list[str]:
+    """The model list OpenRouter walks: the chosen model first, its backup second.
+
+    The backup is dropped when it is the same string as the primary (naming one
+    model twice asks the router to retry the thing that just failed) and when it
+    is turned off with "none".
+    """
+    model = (settings.openrouter_model or "").strip()
+    backup = (settings.openrouter_fallback_model or "").strip()
+    if not backup or backup.lower() == "none" or backup == model:
+        return [model]
+    return [model, backup]
+
+
+def vision_configuration() -> tuple[dict | None, str | None]:
+    """``(config, None)`` when a reader is configured, ``(None, reason)`` when not.
+
+    A reason rather than an exception, shaped like email.email_configuration():
+    "not configured yet" is a normal state this app ships in, and the screen has
+    to be able to name the missing variable rather than render a traceback. The
+    variable NAMES travel with the configuration — telling an administrator to
+    check ANTHROPIC_MODEL on a box running OpenRouter sends them to a setting
+    that does not exist.
+    """
+    if settings.offline_mode:
+        return None, "OFFLINE_MODE is on, so tickets are read without an AI model."
+
+    provider = _provider()
+    if provider == "openrouter":
+        if not (settings.openrouter_api_key or "").strip():
+            return None, ("VISION_PROVIDER is openrouter but OPENROUTER_API_KEY "
+                          "is not set on the server.")
+        model = (settings.openrouter_model or "").strip()
+        if not model:
+            return None, "OPENROUTER_MODEL is set to an empty value."
+        return {
+            "provider": "openrouter",
+            "model": model,
+            "models": _openrouter_models(),
+            "key_variable": "OPENROUTER_API_KEY",
+            "model_variable": "OPENROUTER_MODEL",
+        }, None
+
+    if not (settings.anthropic_api_key or "").strip():
+        return None, "ANTHROPIC_API_KEY is not set on the server."
+    return {
+        "provider": "anthropic",
+        "model": settings.anthropic_model,
+        "key_variable": "ANTHROPIC_API_KEY",
+        "model_variable": "ANTHROPIC_MODEL",
+    }, None
 
 SYSTEM_PROMPT = """\
 You extract fields from an orthopedic implant usage ticket (Maxx Orthopedics or
@@ -211,158 +295,225 @@ def _request_params() -> dict:
     }
 
 
-def check_connection() -> dict:
-    """Can we actually talk to the model? Returns {ok, model, error}.
+def _b64(img: bytes) -> str:
+    return base64.standard_b64encode(img).decode("ascii")
 
-    One small call that constructs the client and sends the same parameter
-    shape as a real extraction. A malformed request is rejected before any
-    generation happens, so this costs almost nothing and answers in seconds.
 
-    It exists because this call has now failed twice at the boundary between
-    our process and the API — once on a token cap, once on a parameter the
-    model rejects — and neither was visible from inside the process. A mocked
-    test suite cannot validate an API contract; only a real call can. The error
-    string is passed through verbatim, because the exact text is the diagnosis.
-    """
-    if settings.offline_mode:
-        return {"ok": True, "model": None,
-                "error": None, "detail": "offline mode — the AI reader is not used"}
-    if not settings.anthropic_api_key:
-        return {"ok": False, "model": settings.anthropic_model,
-                "error": "no Anthropic API key configured"}
-    try:
-        import anthropic
+USER_INSTRUCTION = "Extract the fields as instructed. JSON only."
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+# OpenAI-compatible finish reasons, mapped onto the vocabulary _parse already
+# speaks. One vocabulary, so the truncation check and the refusal check work
+# identically whoever answered.
+_FINISH_REASONS = {
+    "length": "max_tokens",
+    "content_filter": "refusal",
+    "stop": "end_turn",
+}
+
+
+def _call_anthropic(img: bytes, media_type: str, probe: bool = False):
+    """(text, stop_reason, usage) from Anthropic. Transport only."""
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    if probe:
         client.messages.create(
-            max_tokens=1024,
-            timeout=30.0,
+            max_tokens=1024, timeout=30.0,
             messages=[{"role": "user", "content": "Reply with the word: ok"}],
             **_request_params(),
         )
-        return {"ok": True, "model": settings.anthropic_model, "error": None}
+        return "", None, {}
+
+    resp = client.messages.create(
+        **_request_params(),
+        # max_tokens covers thinking AND output together, and an 8000 cap is
+        # what is believed to have emptied a whole batch: a longer system
+        # prompt bought longer deliberation, the JSON was cut off mid-object,
+        # and the parser turned that into an empty result. 16000 is the
+        # documented default for a non-streaming request.
+        max_tokens=16000,
+        # A hung call otherwise holds one of the three batch workers for the
+        # SDK default (10 minutes).
+        timeout=180.0,
+        # SYSTEM_PROMPT is static and identical on every call (one per ticket,
+        # ~100/day) — cache it so repeat extractions reuse it at ~10% of the
+        # input-token cost instead of reprocessing it each time.
+        system=[{"type": "text", "text": SYSTEM_PROMPT,
+                 "cache_control": {"type": "ephemeral"}}],
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64",
+                                             "media_type": media_type,
+                                             "data": _b64(img)}},
+                {"type": "text", "text": USER_INSTRUCTION},
+            ],
+        }],
+    )
+    text = "".join(b.text for b in resp.content
+                   if getattr(b, "type", None) == "text")
+    stop_reason = getattr(resp, "stop_reason", None)
+    if stop_reason == "refusal":
+        details = getattr(resp, "stop_details", None)
+        stop_reason = f"refusal:{getattr(details, 'category', None) or 'unspecified'}"
+    u = getattr(resp, "usage", None)
+    return text, stop_reason, {
+        "tokens_in": getattr(u, "input_tokens", None),
+        "tokens_out": getattr(u, "output_tokens", None),
+        "cache_read": getattr(u, "cache_read_input_tokens", None),
+        "cache_write": getattr(u, "cache_creation_input_tokens", None),
+    }
+
+
+def _call_openrouter(img: bytes, media_type: str, probe: bool = False):
+    """(text, stop_reason, usage) from OpenRouter. Transport only.
+
+    OpenRouter implements the OpenAI chat-completions surface, so the official
+    OpenAI SDK is the client — pointed at a different base URL. There is no
+    prompt caching to ask for here and no thinking budget; the whole request is
+    the system prompt, the image and one instruction.
+    """
+    import openai
+
+    client = openai.OpenAI(api_key=settings.openrouter_api_key,
+                           base_url=OPENROUTER_BASE_URL, timeout=180.0)
+    content = [{"type": "text", "text": USER_INSTRUCTION}]
+    if not probe:
+        content.insert(0, {
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{_b64(img)}"},
+        })
+    resp = client.chat.completions.create(
+        model=settings.openrouter_model,
+        max_tokens=1024 if probe else 16000,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ],
+        extra_headers={"X-Title": "Maxx Usage Tickets"},
+        extra_body={
+            # See OPENROUTER_PRIVACY: routing is restricted to providers that
+            # do not keep prompts for training, on every single request.
+            "provider": OPENROUTER_PRIVACY,
+            # The router walks this list when the first model cannot serve the
+            # request. One request, not a second retry loop in our code.
+            "models": _openrouter_models(),
+        },
+    )
+    if probe:
+        return "", None, {}
+    choice = resp.choices[0]
+    finish = getattr(choice, "finish_reason", None)
+    u = getattr(resp, "usage", None)
+    return choice.message.content or "", _FINISH_REASONS.get(finish, finish), {
+        "tokens_in": getattr(u, "prompt_tokens", None),
+        "tokens_out": getattr(u, "completion_tokens", None),
+        "cache_read": None,
+        "cache_write": None,
+        # Which model actually answered — the router may have walked to the
+        # backup, and a quality question is unanswerable without knowing that.
+        "served_by": getattr(resp, "model", None),
+    }
+
+
+_TRANSPORTS = {"anthropic": _call_anthropic, "openrouter": _call_openrouter}
+
+
+def check_connection() -> dict:
+    """Can we actually talk to the model? Returns {ok, model, error}.
+
+    One small call through the SAME transport a real extraction uses, so a
+    parameter the provider rejects is caught here rather than by a batch.
+
+    It exists because this call has failed twice at the boundary between our
+    process and the API — once on a token cap, once on a parameter the model
+    rejects — and neither was visible from inside the process. A mocked test
+    suite cannot validate an API contract; only a real call can. The error
+    string is passed through verbatim, because the exact text is the diagnosis.
+    """
+    cfg, reason = vision_configuration()
+    if cfg is None:
+        if settings.offline_mode:
+            return {"ok": True, "model": None, "error": None, "detail": reason}
+        return {"ok": False, "model": None, "error": reason}
+    try:
+        _TRANSPORTS[cfg["provider"]](b"", "image/jpeg", probe=True)
+        return {"ok": True, "model": cfg["model"], "error": None,
+                "provider": cfg["provider"]}
     except Exception as e:
         log.error("vision connection check failed: %s", e)
-        return {"ok": False, "model": settings.anthropic_model,
-                "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "model": cfg["model"],
+                "provider": cfg["provider"], "error": f"{type(e).__name__}: {e}"}
 
 
-def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg") -> dict:
-    """Single Claude call. Returns the JSON-parsed per-field result.
+def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg") -> dict:
+    """One call to the configured reader. Returns the per-field result.
 
-    Always a well-formed result, so downstream code is uniform whether or not
-    the API is configured — but a result that came back empty because something
+    Always a well-formed result, so downstream code is uniform whether or not a
+    reader is configured — but a result that came back empty because something
     went wrong carries ``error``, and callers must surface it. A transient
     failure is raised instead, so the ticket is retried rather than recorded as
     empty.
     """
-    if not settings.has_anthropic:
-        from app.pipeline import tracer
+    from app.pipeline import tracer
+
+    cfg, reason = vision_configuration()
+    if cfg is None:
         # OFFLINE_MODE is a deliberate choice — the deterministic path is the
         # whole point of it, so it is not an error. A missing key in a live
         # deployment is a misconfiguration, and saying so is how the next
         # silent outage gets noticed on the first ticket instead of the ninth.
-        deliberate = settings.offline_mode
-        reason = ("offline mode" if deliberate
-                  else "no Anthropic API key configured")
         tracer.record("vision_ai", "Vision AI extraction", "skip",
                       f"Skipped — {reason}", {})
-        if deliberate:
+        if settings.offline_mode:
             return _empty()
         log.error("vision unavailable: %s", reason)
         return _empty(error=reason)
-    if not redacted_img_bytes:
-        from app.pipeline import tracer
+    if not img_bytes:
         tracer.record("vision_ai", "Vision AI extraction", "skip",
                       "Skipped — no image bytes for this ticket", {})
         log.warning("vision skipped: no image bytes")
         return _empty(error="no image bytes for this ticket")
 
+    model = cfg["model"]
     try:
-        import anthropic
+        text, stop_reason, usage = _TRANSPORTS[cfg["provider"]](img_bytes, media_type)
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        b64 = base64.standard_b64encode(redacted_img_bytes).decode("ascii")
-        resp = client.messages.create(
-            **_request_params(),
-            # max_tokens covers thinking AND output together, and an 8000 cap is
-            # what is believed to have emptied a whole batch: a longer system
-            # prompt bought longer deliberation, the JSON was cut off mid-object,
-            # and the parser turned that into an empty result. 16000 is the
-            # documented default for a non-streaming request and leaves far more
-            # room than any ticket needs.
-            max_tokens=16000,
-            # A hung call otherwise holds one of the three batch workers for the
-            # SDK default (10 minutes).
-            timeout=180.0,
-            # SYSTEM_PROMPT is static and identical on every call (one per ticket,
-            # ~100/day) — cache it so repeat extractions reuse it at ~10% of the
-            # input-token cost instead of reprocessing it each time.
-            system=[{
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }],
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64,
-                            },
-                        },
-                        {
-                            "type": "text",
-                            "text": "Extract the fields as instructed. JSON only.",
-                        },
-                    ],
-                }
-            ],
-        )
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", None) == "text"
-        )
-        stop_reason = getattr(resp, "stop_reason", None)
-        # A declined request comes back as HTTP 200 with no text, so it would
-        # otherwise fall through to the parser and be reported as "unparseable
-        # response" — true, but it would send the next person hunting in the
-        # wrong place. Say what actually happened.
-        if stop_reason == "refusal":
-            details = getattr(resp, "stop_details", None)
-            category = getattr(details, "category", None) or "unspecified"
+        # A declined request comes back as a normal 200 with no text, so it
+        # would otherwise fall through to the parser and be reported as
+        # "unparseable response" — true, but it would send the next person
+        # hunting in the wrong place. Say what actually happened.
+        if str(stop_reason or "").startswith("refusal"):
+            category = str(stop_reason).partition(":")[2] or "unspecified"
             log.error("vision request was declined (category=%s)", category)
             result = _empty(error=f"request declined by the model ({category})")
         else:
             result = _parse(text, stop_reason)
-        from app.pipeline import tracer
-        line_count = len(result.get("lines") or [])
+
         err = result.get("error")
-        usage = getattr(resp, "usage", None)
-        tokens_in = getattr(usage, "input_tokens", None)
-        tokens_out = getattr(usage, "output_tokens", None)
-        cache_read = getattr(usage, "cache_read_input_tokens", None)
-        cache_write = getattr(usage, "cache_creation_input_tokens", None)
-        token_str = f" | {tokens_in}↑ {tokens_out}↓ tokens" if tokens_in is not None else ""
-        if cache_read:
-            token_str += f" ({cache_read} cached)"
+        line_count = len(result.get("lines") or [])
+        served = usage.get("served_by") or model
+        tokens_in, tokens_out = usage.get("tokens_in"), usage.get("tokens_out")
+        token_str = (f" | {tokens_in}↑ {tokens_out}↓ tokens"
+                     if tokens_in is not None else "")
+        if usage.get("cache_read"):
+            token_str += f" ({usage['cache_read']} cached)"
         tracer.record(
             "vision_ai",
-            f"Vision AI extraction ({settings.anthropic_model})",
+            f"Vision AI extraction ({served})",
             "fail" if err else ("ok" if line_count > 0 else "warn"),
             (f"FAILED — {err}" if err
-             else f"{settings.anthropic_model} — {line_count} line(s) found{token_str}"),
+             else f"{served} — {line_count} line(s) found{token_str}"),
             {
-                "model": settings.anthropic_model,
+                "provider": cfg["provider"],
+                "model": model,
+                "served_by": served,
                 "stop_reason": stop_reason,
                 "error": err,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
-                "cache_read_input_tokens": cache_read,
-                "cache_creation_input_tokens": cache_write,
+                "cache_read_input_tokens": usage.get("cache_read"),
+                "cache_creation_input_tokens": usage.get("cache_write"),
                 "header": result.get("header"),
                 "lines": result.get("lines"),
                 "freight": result.get("freight"),

@@ -5,9 +5,25 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.20.0"
+VERSION = "2.21.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.21.0",
+        "date": "2026-09-30",
+        "notes": [
+            "You can now choose which AI service reads the tickets. Alongside "
+            "Claude there is an open-weight option that costs roughly a tenth "
+            "as much — useful when a spend limit is what stopped a batch",
+            "Whichever one is selected, everything else behaves identically: "
+            "the same instructions, the same checks, the same 'Test AI "
+            "connection' button, and the same refusal to start a batch it "
+            "cannot read",
+            "The spreadsheet's debug trace now records which model actually "
+            "answered, so a question about reading quality can be traced to "
+            "the model that produced it",
+        ],
+    },
     {
         "version": "2.20.0",
         "date": "2026-09-30",
