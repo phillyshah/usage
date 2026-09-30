@@ -4,8 +4,12 @@ Mirrors the four private Supabase Storage buckets:
   redacted-images, output-sheets, corrected-uploads, reference-logs
 
 In OFFLINE_MODE the same calls write under LOCAL_DATA_DIR/storage/<bucket>/ so
-the pipeline runs end to end without a network. Raw images are never persisted
-by anything in this module — callers hand us only redacted bytes.
+the pipeline runs end to end without a network.
+
+The ticket-image bucket is still named "redacted-images" on the server. The
+name is history — images are no longer masked before storage — but renaming the
+bucket would strand every image already in it, so only the Python constant
+changed.
 """
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ from pathlib import Path
 from app.config import settings
 from app.db import db
 
-REDACTED_IMAGES = "redacted-images"
+TICKET_IMAGES = "redacted-images"   # bucket id is historical; see above
 OUTPUT_SHEETS = "output-sheets"
 CORRECTED_UPLOADS = "corrected-uploads"
 REFERENCE_LOGS = "reference-logs"

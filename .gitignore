@@ -28,9 +28,13 @@ htmlcov/
 tests/fixtures/Expiry_Log.xlsx
 tests/fixtures/ticket_*.jpg
 
-# PHI: real patient ticket photos must NEVER be committed (BUILD_SPEC §9). Drop
-# them in locally to verify redaction; these patterns keep them out of git.
+# Real patient ticket photos and scans must NEVER be committed. Drop them in
+# locally to test against; these patterns keep them out of git. The images are
+# no longer masked before storage, so git is the only place this rule still
+# applies — and it applies to the PDFs the team now sends as well as to phone
+# photos, which is why *.pdf is here.
 tests/fixtures/real/
 *.jpeg
+*.pdf
 MH*.jpg
 MO*.jpg

@@ -117,7 +117,7 @@ Legend: **READ** = off the ticket · **DECODE** = from the DataMatrix · **DERIV
 - **Wasted items.** A handwritten **"W" or "wasted"** near a component marks it wasted. **Still emit the
   line as a usage row** — add a `WASTED` note and highlight the cell yellow. **If a price is written, it
   still counts** toward the Grand Total (wasted status does not exclude it; a wasted line with no price contributes 0).
-- **Coloring:** confident → no fill; single-source guess → amber; blank/unreadable → red; wasted → yellow + note.
+- **Coloring:** confident → no fill; a suggestion (weak read, learned price, hospital from the surgeon record, a figure the grand total determines) → amber, with its provenance in Notes; nothing to suggest → red *and blank*; wasted → yellow + note. An amber cell always carries a value; an empty cell is always red. (Changed in 2.19.0: a value we hold is no longer deleted for being low-confidence.)
 
 ---
 

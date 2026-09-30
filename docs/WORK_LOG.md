@@ -16,13 +16,13 @@ Last updated: 2026-09-30.
 
 | | |
 |---|---|
-| Version in `main` | **2.17.0** (PR #46); **2.18.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.17.0** — confirmed live 2026-09-29 |
-| `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
+| Version in `main` | **2.18.0** (PR #47); **2.19.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.17.0** — confirmed live 2026-09-29. 2.18.0 and 2.19.0 both undeployed |
+| `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
-| Effort | `medium` extraction, `low` initials |
+| Effort | `medium` extraction. The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 334 passed, 2 skipped |
+| Tests | 386 passed, 1 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -32,45 +32,40 @@ PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
 
 ## Open threads
 
-**1. The patient mask does not cover every layout. DEFERRED BY THE USER, 2026-09-29.**
-Raised with evidence and consciously deprioritised in favour of extraction work;
-recorded here so it is not lost. What is known:
+**1. ~~The patient mask does not cover every layout.~~ CLOSED 2026-09-30 — the
+mask was removed entirely.** Andy's decision, on the grounds that storage is
+HIPAA-compliant so the mask was not buying the protection it cost.
 
-- Tickets whose sticker runs past `grid_region.y` (0.26) keep `Sex`, `MRN` and
-  `Physician` visible **below** the mask. Confirmed on three real tickets in one
-  PDF; the name and DOB rows are covered, the bottom rows are not.
-- A Northside Hospital "Special Purchase Request" puts patient details at top
-  **left**; an Orthopedics ticket masks the right, so nothing is covered.
-- A ticket photographed at an angle on an instrument tray, and one scanned
-  rotated 90°, put the form somewhere other than the frame, which makes every
-  fractional coordinate meaningless.
+It cost a lot. The band was placed by fixed fractional coordinates, so on a
+differently-framed photo it clipped `Surgery Date` and `Surgeon` out of the
+header — the whole of `_rule_edge` existed to compensate — and when it could not
+place itself the ticket went to `manual_queue`, where it produced **zero rows**
+in Usage, Line Items and Raw Extraction while still appearing on the Tickets
+sheet. A ticket that vanishes from the deliverable is worse than one that needs
+review.
 
-The root cause is not the rectangle's size. It is that the pipeline assumes the
-**form fills the frame in a fixed orientation**, and photographs do not. The fix
-is to locate and deskew the form first, then find the sticker inside it, and to
-make the gate genuinely fail safe: `located` has never once returned False in
-production, so the spec's "route to manual queue" path has never run. That is a
-behavioural change with real review-volume cost, which is why it is a decision
-and not a patch.
+Measured before removal, on the four ticket photographs from the 2026-09-30
+batch: the sticker sits at y≈0.31–0.38 while `patient_mask` stopped at 0.26, so
+the stored images kept patient name, DOB and CSN. The coverage check that was
+supposed to catch exactly this could never fire — it re-read the rectangle it
+had just painted black, so `surviving == 0` was a tautology. Worth remembering
+as a class of bug: a check that verifies its own output verifies nothing.
 
-Two of the five example images were never saved to disk, so a detector cannot be
-built or tested against them yet. Ask for them as files before starting.
+Consequences now carried in CLAUDE.md rather than here: the Anthropic BAA covers
+the main extraction call (full ticket image, not a crop), and `.gitignore` is the
+only place the "don't let PHI escape" rule is still enforced by code — which is
+why `*.pdf` was added to it.
 
-**2. `detect_template()` still guesses, and the redaction gate trusts the guess.**
-With no filename evidence, it returns `Maxx Orthopedics` as a *guess*
-(`app/pipeline/template.py`), and `redact_patient_region` treats that as fact.
-The spec says an unknown template must route to manual queue; that path is
-currently bypassed. v2.12.2 fixed the *observed* case (MH/MO prefixes are now
-recognised) so this should rarely fire, but an oddly-named upload still gets
-masked on a coin flip. The honest fix routes those to manual queue, which costs
-review volume — deliberately left as a decision, not made unilaterally.
+**2. ~~`detect_template()` still guesses, and the redaction gate trusts the
+guess.~~ CLOSED 2026-09-30.** There is no redaction gate. `detect_template` still
+guesses `Maxx Orthopedics` with no filename evidence, but the only thing riding
+on it now is `grid_region` for the barcode crop, where a wrong guess costs
+accuracy rather than exposure. The two layouts share the same `grid_region`, so
+in practice it costs nothing.
 
-**3. Already-stored Maxx Health images were never re-masked.**
-Anything ingested *before* the 2.12.2 deploy (2026-09-23) under an `MH*` filename
-has a *visible* patient sticker in the `redacted-images` bucket (see the 2.12.2
-entry below). MH tickets ingested from that deploy onward mask correctly. Bounded
-by the 14-day retention, so the last affected image ages out around **2026-10-07**;
-re-uploading those tickets re-masks them sooner. No decision recorded either way.
+**3. ~~Already-stored Maxx Health images were never re-masked.~~ MOOT
+2026-09-30.** Nothing is masked any more. `scripts/purge_redacted_images.py`
+remains if old images should be cleared out; it dry-runs by default.
 
 **4. The two price-list tabs have opposite shapes, and neither is dense.**
 Measured against the real `Hospital_Price_List-2.xlsx` (2,459 rows after the
@@ -521,6 +516,85 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.19.0 — The batch that came back 54% red
+
+**What the user saw.** Nine real tickets, 24 rows, and 193 of 360 cells in the
+Usage sheet red. "This is an absolute disaster… WAY WAY WAY too many reds."
+
+**What it actually was.** Not a confidence-tuning problem. The vision call
+returned nothing on all nine tickets and the run reported success.
+
+The workbook proves it on its own. `Raw Extraction` had `Vision Ref`, `Vision
+Lot` and `Vision Price` **null on all 24 lines** while `Barcode Decoded?` was
+"Yes" on all 24. The red columns were exactly the vision-fed ones — Surgeon,
+Inits, DistCode, Date, Month, Year, Hospital, Price, each red on 24/24 rows, 192
+of the 193. The clean columns were exactly the barcode-fed ones. The control is
+decisive: the Sep 25 batch, same code path five days earlier, had 157/159 vision
+refs and populated headers.
+
+**Why nobody was told.** `vision.py` ended in `except Exception: return _EMPTY`
+— unbound, unlogged, unflagged, unretried. Three more silent paths sat beside
+it: `_parse` turned truncated JSON into the same empty result *after a billed
+call*; `tracer.record` is a no-op outside `/debug/trace`, so a normal batch
+persisted nothing about the call at all; and `_safe_process` already retried
+`RateLimitError` / `529` / "overloaded" four times with backoff — none of which
+could ever reach it, because this handler swallowed them first. The three empty
+results (no key, API error, unparseable response) were byte-identical to each
+other and to a genuinely blank ticket.
+
+**The likely trigger, stated honestly.** 2.17.0 grew `SYSTEM_PROMPT` from ~4.4k
+to ~6.0k chars and asked the model for materially more work, while the call ran
+`thinking={"type": "adaptive"}` with `max_tokens=8000` covering thinking *and*
+output. Longer thinking truncates the JSON, `_parse` makes that an empty result.
+A plain API error is the alternative. **The two cannot be separated from the
+evidence, because the failure left no record anywhere** — which is the bug, not
+a footnote. Both are now removed (fixed 4000-token thinking budget inside
+16000), and any recurrence identifies itself.
+
+**The lesson worth keeping.** A deterministic path that still works is the most
+dangerous thing to have next to a failing one. The barcodes decoded, the
+spreadsheet came out full-looking, and the failure wore the exact costume of a
+hard day's tickets. Any "never let X sink the batch" handler needs to answer
+"and how will anyone find out?" before it is allowed to return a default.
+
+**The second, independent problem.** Even with vision healthy, red was the wrong
+answer far too often, because `low` confidence meant *delete the value*. A
+sub-threshold read was thrown away; the hospital written on the ticket never
+reached the Usage column (fed only by the surgeon lookup); the grand-total
+residual was computed for a log message and discarded. In every case the
+reviewer was asked to find something the tool was holding. Red now means one
+thing: nothing to suggest. `confidence.at_least_amber` and `write._shown`
+enforce both halves — an amber cell always carries a value, an empty cell is
+always red.
+
+**Backtested** against the four tickets whose photographs we have, read
+correctly: **54% red → 10%**, and every remaining red is genuine (three tickets
+have no per-line prices written at all; MO18777-A has surgeon, date and rep
+blank on the form; the handwritten pin lines have no lot or expiry). The Cox
+ticket reconciles exactly — 1300 + 1150 + 900 + 250 + 175 of pins = the circled
+3775 — exercising per-label prices, unlabelled handwritten lines and the
+`(x2) 25ea` convention in one case.
+
+**Two judgement calls made against a design proposal.** Worth recording because
+both look like improvements until you check them:
+
+- *Do not* let step 5 overwrite an amber Price cell. The proposal was that amber
+  marks a tool suggestion and a price-list hit is better evidence. It doesn't:
+  amber is the confidence colour for **any** single-source read, so most prices
+  a human wrote on a ticket arrive amber too, and the change would have let a
+  price list silently overwrite the figure on the ticket. Verified by
+  `test_at7_an_existing_zero_price_is_left_alone`, which caught it immediately.
+- *Do* guard the learning harvest. `learn_price` treated any non-empty price on
+  a returned workbook as a human decision, so a suggestion nobody touched came
+  back and was learned as ground truth — the tool citing its own arithmetic.
+  Step 5 already refuses this for its rose estimates; extraction-time
+  suggestions needed the same refusal the moment they started filling cells
+  that used to arrive blank. `harvest._untouched_suggestions`.
+
+A GS1-decoded `(240)` REF was also being scored as if someone had read it by
+eye, so a barcode-certain part number rendered blank and red whenever the part
+master hadn't caught up with it — routine for hip components and disposables.
 
 ### 2.18.0 — Per-field accuracy report
 A History panel grouping every correction by field, worst first, split into

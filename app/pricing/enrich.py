@@ -39,6 +39,20 @@ GREEN = PatternFill(start_color="FF39FF14", end_color="FF39FF14", fill_type="sol
 ROSE = PatternFill(start_color="FFFFC7CE", end_color="FFFFC7CE", fill_type="solid")
 YELLOW_RGB = "FFFF00"
 
+# NOTE on amber and this step's eligibility rule.
+#
+# It is tempting to let this step overwrite an amber Price cell, on the grounds
+# that amber marks a suggestion and a price-list hit is better evidence. It does
+# not. Amber is the confidence colour for ANY single-source read, so most prices
+# a human actually wrote on a ticket arrive here amber too, and treating the
+# colour as "the tool guessed this" would let a price list silently overwrite
+# the figure on the ticket. That is far worse than the thing it would fix.
+#
+# So the rule stays what it has always been: this step fills cells that are
+# BLANK. A reviewer who disagrees with an extraction-time suggestion clears the
+# cell, and this step then prices it. The suggestion's provenance is in Notes
+# either way, which is what makes that a decision rather than a guess.
+
 # Workbook parts openpyxl cannot round-trip. Our own generated workbooks contain
 # none of these, so the normal path never trips it — but a file the operator has
 # decorated in Excel would silently lose them on save, and silently destroying

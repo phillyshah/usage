@@ -33,12 +33,15 @@ class Settings(BaseSettings):
     # prices run $50–$2,500, so 7500 leaves generous headroom.
     price_sanity_max: float = 7500
 
-    # --- Patient initials (PHI) ---
-    # OFF by default: with this false the app never reads patient data at all,
-    # which is the original LABEL_EXTRACTION_BUILD_SPEC §9 posture. Turning it on
-    # sends ONLY the cropped patient sticker to the vision API and stores ONLY
-    # the two initials — see app/pipeline/patient.py. Requires a HIPAA BAA on the
-    # Anthropic account.
+    # --- Patient initials ---
+    # Whether the two initials are KEPT. It no longer decides whether they are
+    # read: the ticket image is sent whole, patient sticker included, so the
+    # model sees it either way. Off means assemble discards the two letters and
+    # nothing about the patient reaches the database or the workbook.
+    #
+    # The ticket image is no longer masked before it is sent or stored, so a
+    # HIPAA BAA on the Anthropic account is required for the extraction call
+    # itself, not just for this flag.
     extract_patient_initials: bool = False
 
     # --- Outbound email (daily status notification) ---

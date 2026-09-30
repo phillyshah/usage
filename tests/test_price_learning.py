@@ -173,3 +173,81 @@ def test_the_learned_price_is_what_extraction_will_offer():
     out, _, _ = _priced_workbook()
     _send_back(out)
     assert db.price_suggestion("MTUUX100-GK", "Blake Hospital") == 925
+
+
+# ---------------------------------------------------------------------------
+# An untouched suggestion is the tool agreeing with itself, not a human decision
+# ---------------------------------------------------------------------------
+def test_an_untouched_extraction_suggestion_is_not_learned_back():
+    """Step 5 already refuses to learn its own rose estimates, for exactly this
+    reason. Extraction-time suggestions needed the same refusal the moment they
+    started filling cells that used to come back blank — otherwise the next
+    ticket cites this one's guess as ground truth."""
+    from app.learning.harvest import harvest_ticket
+    from app.pipeline.assemble import assemble_and_persist
+
+    batch = db.create_batch()
+    t = db.create_ticket({"batch_id": batch["id"], "source_filename": "MO-sugg.jpg",
+                          "status": "pending_review"})
+    ticket_id = t["ticket_id"]
+
+    def _f(value, confidence="high"):
+        return {"value": value, "confidence": confidence}
+
+    # Two priced lines and one blank, with a grand total that pins the blank at 175.
+    assemble_and_persist(db.get_ticket(ticket_id), {
+        "header": {"hospital": _f("Mercy General"), "surgery_date": _f("2026-06-01")},
+        "lines": [{"index": 0, "ref": _f("SUGG-A"), "qty": _f(1), "unit_price": _f(1000)},
+                  {"index": 1, "ref": _f("SUGG-B"), "qty": _f(1),
+                   "unit_price": _f(None, "low")}],
+        "freight": _f(0), "grand_total": _f(1175),
+    }, [{"gtin": None, "lot": None, "expiry": None, "mfg": None, "serial": None,
+         "raw": None, "decoded": False, "ref": None} for _ in range(2)])
+
+    rows = sorted(db.lines_for_ticket(ticket_id), key=lambda x: x.get("created_at") or "")
+    assert rows[1]["unit_price"] == 175.0, "precondition: the residual was filled in"
+
+    # The reviewer sends it back untouched.
+    counts = harvest_ticket({
+        "ticket_id": ticket_id, "hospital": "Mercy General",
+        "lines": {r["line_id"]: {"line_id": r["line_id"], "ref": r["ref"],
+                                 "unit_price": r["unit_price"]} for r in rows},
+    })
+    assert counts["suggestions_skipped"] == 1
+    assert db.price_suggestion("SUGG-B", "Mercy General") is None, \
+        "the tool's own arithmetic must not become learned ground truth"
+    # The price the human actually left alone because it was READ is still learned.
+    assert db.price_suggestion("SUGG-A", "Mercy General") == 1000.0
+
+
+def test_a_changed_suggestion_is_learned_as_a_correction():
+    """Overriding a suggestion IS a human decision, and the whole point of
+    showing one is to make that decision cheap."""
+    from app.learning.harvest import harvest_ticket
+    from app.pipeline.assemble import assemble_and_persist
+
+    batch = db.create_batch()
+    t = db.create_ticket({"batch_id": batch["id"], "source_filename": "MO-sugg2.jpg",
+                          "status": "pending_review"})
+    ticket_id = t["ticket_id"]
+
+    def _f(value, confidence="high"):
+        return {"value": value, "confidence": confidence}
+
+    assemble_and_persist(db.get_ticket(ticket_id), {
+        "header": {"hospital": _f("Mercy General"), "surgery_date": _f("2026-06-01")},
+        "lines": [{"index": 0, "ref": _f("SUGG-C"), "qty": _f(1), "unit_price": _f(1000)},
+                  {"index": 1, "ref": _f("SUGG-D"), "qty": _f(1),
+                   "unit_price": _f(None, "low")}],
+        "freight": _f(0), "grand_total": _f(1175),
+    }, [{"gtin": None, "lot": None, "expiry": None, "mfg": None, "serial": None,
+         "raw": None, "decoded": False, "ref": None} for _ in range(2)])
+
+    rows = sorted(db.lines_for_ticket(ticket_id), key=lambda x: x.get("created_at") or "")
+    counts = harvest_ticket({
+        "ticket_id": ticket_id, "hospital": "Mercy General",
+        "lines": {rows[1]["line_id"]: {"line_id": rows[1]["line_id"],
+                                       "ref": "SUGG-D", "unit_price": 200}},
+    })
+    assert counts["price"] == 1 and counts["suggestions_skipped"] == 0
+    assert db.price_suggestion("SUGG-D", "Mercy General") == 200.0

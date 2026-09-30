@@ -4,7 +4,14 @@ python-multipart
 pydantic-settings
 python-dotenv
 supabase
-anthropic
+# Bounded. This was unpinned, and `COPY requirements.txt` is its own Docker
+# layer, so the SDK a build actually installed depended on when that layer last
+# rebuilt — an invisible variable in a call that had already failed silently
+# once. The floor is the oldest version verified to accept the parameters
+# vision.py sends (thinking={"type": "enabled", ...}, output_config); the
+# ceiling stops a major release changing them under us. A floor rather than an
+# exact pin so this cannot downgrade a working deployment.
+anthropic>=1.8.0,<2
 openpyxl
 pillow
 numpy

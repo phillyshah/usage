@@ -145,7 +145,12 @@ def test_debug_correct_response_shape():
     r = client.post(f"/debug/trace/{ticket_id}/correct", json={"confirm_all": True})
     body = r.json()
     assert set(body.keys()) >= {"ticket_id", "status", "learned", "audited_fields"}
-    assert set(body["learned"].keys()) == {"part_desc", "rep", "price", "gtin_xref", "surgeon_map"}
+    assert set(body["learned"].keys()) == {
+        "part_desc", "rep", "price", "gtin_xref", "surgeon_map",
+        # Prices left exactly as the tool suggested them. Counted, not learned:
+        # an untouched suggestion is the tool agreeing with itself.
+        "suggestions_skipped",
+    }
     assert isinstance(body["audited_fields"], int)
 
 

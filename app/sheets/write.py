@@ -13,8 +13,14 @@ Sheets:
 
 Cell colour follows the confidence model (PROJECT_OVERVIEW principle 2):
     high   -> no fill (confident)
-    medium -> amber  FFF2CC (low-confidence guess, eyeball it)
-    low    -> red    F4CCCC, cell left BLANK (no confident read, human fills)
+    medium -> amber  FFF2CC (a suggestion: confirm it; Notes says where it came from)
+    low    -> red    F4CCCC, cell BLANK (nothing to suggest — the human fills it)
+
+An amber cell ALWAYS carries a value and an empty cell is ALWAYS red; _shown()
+enforces both halves. A value used to be deleted whenever its confidence was
+low, so a weak read, a learned price and a hospital the ticket plainly named
+were all shown as an empty red cell — the reviewer was asked to look up
+something the tool was already holding.
     wasted -> yellow FFFF00 on the Price cell (+ WASTED note); still a usage row
 Keys, derived counts, and Notes stay uncolored.
 """
@@ -30,7 +36,6 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from app.db import db
-from app.pipeline.reference import resolve_surgeon
 
 AMBER = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
 RED = PatternFill(start_color="F4CCCC", end_color="F4CCCC", fill_type="solid")
@@ -54,7 +59,6 @@ HEADER_FONT = Font(bold=True)
 #   price       -> line unit_price (conf (line,"unit_price")); wasted -> yellow
 #   line:<f>    -> line device field (conf (line, f))
 #   part:<attr> -> part_info lookup by Ref (conf (line,"description"))
-#   surg:<attr> -> surgeon_info lookup by <LastName><DistCode> (surgeon match)
 #   notes       -> merged per-line + ticket flags (uncolored)
 USAGE_COLUMNS = [
     ("Source Image Filename", "file"),
@@ -65,7 +69,7 @@ USAGE_COLUMNS = [
     ("Date", "date"),
     ("Month", "month"),
     ("Year", "year"),
-    ("Hospital", "surg:hospital"),
+    ("Hospital", "read:hospital"),
     ("Quantity", "qty"),
     ("Price", "price"),
     ("Lot Number", "line:lot"),
@@ -215,6 +219,25 @@ def _fill_for(conf: str):
     return None
 
 
+def _shown(value, conf: str):
+    """(value, confidence) as the cell should actually appear.
+
+    One rule, applied everywhere: an amber cell always carries a value, and an
+    empty cell is always red. Those two facts are what make the colours worth
+    reading — amber means "here is a candidate, confirm it", red means "there
+    was genuinely nothing to propose".
+
+    This used to be `None if conf == "low" else value`, which enforced only half
+    of it: a value scored low was deleted even when we had it. The other half
+    matters too — a non-low confidence attached to something that formats to
+    nothing (an unparseable surgery_date, say) would otherwise render as an
+    empty amber cell, which asks the reviewer to check a blank.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None, "low"
+    return value, conf
+
+
 def _style_header(ws, ncols: int) -> None:
     for c in range(1, ncols + 1):
         cell = ws.cell(row=1, column=c)
@@ -258,15 +281,6 @@ def _write_usage_sheet(ws, tickets) -> None:
         lines.sort(key=lambda x: x.get("created_at") or "")
         ticket_flags = _flags_text(ticket)
 
-        # Surgeon chain resolved once per ticket from the read surgeon + DistCode.
-        surg = resolve_surgeon(ticket.get("surgeon"), ticket.get("rep_code"))
-        # Hospital cross-check: handwritten hospital vs the looked-up value.
-        vis_hosp = ticket.get("hospital")
-        hosp_mismatch = bool(
-            surg["matched"] and vis_hosp and surg.get("hospital")
-            and str(vis_hosp).strip().lower() != str(surg["hospital"]).strip().lower()
-        )
-
         for i, line in enumerate(lines):
             stem = _file_stem(ticket.get("source_filename"))
             line_id = line["line_id"]
@@ -290,22 +304,21 @@ def _write_usage_sheet(ws, tickets) -> None:
                     val = line.get("qty") or 1
                 elif kind == "price":
                     conf = cmap.get((line_id, "unit_price"), "low")
-                    val = None if conf == "low" else line.get("unit_price")
+                    val, conf = _shown(line.get("unit_price"), conf)
                     if wasted:  # wasted -> yellow regardless of price presence
                         override = YELLOW
                 elif kind.startswith("read:"):
                     f = kind.split(":", 1)[1]
-                    conf = cmap.get((None, f), "low")
-                    val = None if conf == "low" else ticket.get(f)
+                    val, conf = _shown(ticket.get(f), cmap.get((None, f), "low"))
                 elif kind in ("date", "month", "year"):
-                    conf = cmap.get((None, "surgery_date"), "low")
-                    if conf != "low":
-                        sd = ticket.get("surgery_date")
-                        val = {"date": _date_mdy, "month": _month_num, "year": _year_num}[kind](sd)
+                    sd = ticket.get("surgery_date")
+                    val, conf = _shown(
+                        {"date": _date_mdy, "month": _month_num, "year": _year_num}[kind](sd),
+                        cmap.get((None, "surgery_date"), "low"))
                 elif kind.startswith("line:"):
                     f = kind.split(":", 1)[1]
-                    conf = cmap.get((line_id, f), "low")
-                    val = None if conf == "low" else _fmt_field(f, line.get(f))
+                    val, conf = _shown(_fmt_field(f, line.get(f)),
+                                       cmap.get((line_id, f), "low"))
                 elif kind.startswith("part:"):
                     attr = kind.split(":", 1)[1]
                     # Same provenance as the line's Description confidence.
@@ -315,22 +328,9 @@ def _write_usage_sheet(ws, tickets) -> None:
                         conf, val = "low", None
                     else:
                         val = pinfo.get(attr)
-                elif kind.startswith("surg:"):
-                    attr = kind.split(":", 1)[1]
-                    if surg["matched"]:
-                        val = surg.get(attr)
-                        # Master match is deterministic (high); a match learned
-                        # from corrections is real but unverified -> medium.
-                        conf = "medium" if surg.get("source") == "learned" else "high"
-                        if val is None:  # learned rows don't carry every column
-                            conf = "low"
-                        elif attr == "hospital" and hosp_mismatch:
-                            conf = "medium"  # cross-check disagreement -> eyeball
-                    else:
-                        conf, val = "low", None
 
                 values.append(val)
-                fills.append(override or _fill_for(conf) if (override or conf) else None)
+                fills.append((override or _fill_for(conf)) if (override or conf) else None)
 
             ws.append(values)
             r = ws.max_row
@@ -355,14 +355,16 @@ def _write_tickets_sheet(ws, tickets) -> None:
             elif header == "Flags / Notes":
                 row_vals.append(_flags_text(ticket))
             else:
-                conf = cmap.get((None, field), "low")
-                row_vals.append("" if conf == "low" else _fmt_field(field, ticket.get(field)))
+                shown, _ = _shown(_fmt_field(field, ticket.get(field)),
+                                  cmap.get((None, field), "low"))
+                row_vals.append("" if shown is None else shown)
         ws.append(row_vals)
         r = ws.max_row
         for idx, (header, field) in enumerate(TICKET_COLUMNS, start=1):
             if field is None:
                 continue
-            fill = _fill_for(cmap.get((None, field), "low"))
+            fill = _fill_for(_shown(_fmt_field(field, ticket.get(field)),
+                                    cmap.get((None, field), "low"))[1])
             if fill:
                 ws.cell(row=r, column=idx).fill = fill
     _autosize(ws, len(TICKET_COLUMNS))
@@ -386,14 +388,16 @@ def _write_line_items_sheet(ws, tickets) -> None:
                 elif header == "Flags / Notes":
                     row_vals.append(_flags_text(line))
                 else:
-                    conf = cmap.get((line_id, field), "low")
-                    row_vals.append("" if conf == "low" else _fmt_field(field, line.get(field)))
+                    shown, _ = _shown(_fmt_field(field, line.get(field)),
+                                      cmap.get((line_id, field), "low"))
+                    row_vals.append("" if shown is None else shown)
             ws.append(row_vals)
             r = ws.max_row
             for idx, (header, field) in enumerate(LINE_ITEM_COLUMNS, start=1):
                 if field is None:
                     continue
-                fill = _fill_for(cmap.get((line_id, field), "low"))
+                fill = _fill_for(_shown(_fmt_field(field, line.get(field)),
+                                        cmap.get((line_id, field), "low"))[1])
                 if fill:
                     ws.cell(row=r, column=idx).fill = fill
     _autosize(ws, len(LINE_ITEM_COLUMNS))
@@ -443,11 +447,17 @@ def _write_legend_sheet(ws) -> None:
     _style_header(ws, 3)
     legend = [
         ("(white / no fill)", "Confident — validated or agreed across sources", "Nothing — trust it", None),
-        ("Amber", "Low-confidence guess — single source or a minor disagreement", "Eyeball it; fix if wrong", AMBER),
-        ("Red", "Blank / unreadable — no confident read", "Fill it in", RED),
+        ("Amber", "A suggestion, not a fact — a read the model was unsure of, a "
+                  "learned price, a hospital from the surgeon record, or a "
+                  "number worked out from this ticket's grand total. The Notes "
+                  "column says which.",
+                  "Confirm it or correct it — don't retype what's already right", AMBER),
+        ("Red", "Nothing to suggest — nothing was read and no fallback applied",
+                "Fill it in from the ticket", RED),
         ("Yellow", "Wasted component (price still counts toward the total)", "Confirm the WASTED note", YELLOW),
         ("Neon green", "Price filled from the hospital price list (step 5)", "Nothing — it came straight from the list", GREEN),
-        ("Rose", "Estimated price (step 5) — inferred, not looked up", "Check it before relying on it", ROSE),
+        ("Rose", "Estimated price (step 5) — inferred from other rows or "
+                 "hospitals, not looked up", "Check it before relying on it", ROSE),
     ]
     for color, meaning, todo, fill in legend:
         ws.append([color, meaning, todo])
@@ -456,6 +466,9 @@ def _write_legend_sheet(ws) -> None:
     ws.append([])
     ws.append(["Note", "Ticket ID and Line ID (Line Items sheet) are stable keys — do not edit them.", ""])
     ws.append(["", "Edit values directly in the colored cells, save, and re-upload.", ""])
+    ws.append(["", "An amber cell always has something in it. An empty cell is "
+                   "always red — that means the tool genuinely had nothing to "
+                   "offer, not that it decided not to say.", ""])
     _autosize(ws, 3)
 
 

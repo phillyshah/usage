@@ -105,26 +105,21 @@ def test_all_good_files_ingest():
 
 
 # ---------------------------------------------------------------------------
-# 3. PHI gate: encode failure -> manual_queue, store NOTHING (never raw bytes).
+# 3. Unreadable image -> manual_queue, and a ticket never points at nothing.
 # ---------------------------------------------------------------------------
 def test_encode_failure_routes_to_manual_queue_and_stores_nothing():
     batch = db.create_batch()
 
     fake_storage = Mock()
-    # Force the path to the encode gate deterministically: the region "locates"
-    # (located=True) so we reach the encode step, then encoding yields empty bytes.
-    redacted = np.zeros((400, 600, 3), np.uint8)
-    with patch.object(run, "redact_patient_region", return_value=(redacted, True)), \
-         patch.object(run.preprocess, "encode_image", return_value=b""), \
+    with patch.object(run.preprocess, "encode_image", return_value=b""), \
          patch.object(run, "put_object", fake_storage):
         res = ingest_image(_jpeg_bytes(), "MO-test.jpg", batch["id"])
 
-    # Encode failed -> we cannot prove the bytes are masked -> manual queue.
+    # Nothing to store -> manual queue, rather than a ticket whose image
+    # reference dangles and whose rows silently come back empty later.
     assert res["status"] == "manual_queue"
     ticket = db.get_ticket(res["ticket_id"])
     assert not ticket.get("source_image_path")  # nothing stored
-
-    # Crucially: storage was never touched, so no raw (or unredacted) bytes leaked.
     fake_storage.assert_not_called()
 
 
@@ -134,10 +129,8 @@ def test_encode_failure_routes_to_manual_queue_and_stores_nothing():
 def test_storage_failure_flips_ticket_to_manual_queue_and_raises():
     batch = db.create_batch()
 
-    redacted = np.zeros((400, 600, 3), np.uint8)
     boom = Exception("storage down")
-    with patch.object(run, "redact_patient_region", return_value=(redacted, True)), \
-         patch.object(run.preprocess, "encode_image", return_value=b"jpegbytes"), \
+    with patch.object(run.preprocess, "encode_image", return_value=b"jpegbytes"), \
          patch.object(run, "put_object", side_effect=boom):
         try:
             ingest_image(_jpeg_bytes(), "MO-store-fail.jpg", batch["id"])

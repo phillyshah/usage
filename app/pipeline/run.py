@@ -1,15 +1,16 @@
-"""Orchestration: ingest one image (redact gate) and run a batch.
+"""Orchestration: ingest one image and run a batch.
 
-Ingest (`ingest_image`) is the PHI gate path used by POST /images:
-    raw bytes (in memory) -> preprocess -> detect template -> REDACT
-      -> if not located: ticket=manual_queue, store NOTHING, return
-      -> else: (optional, flag-gated) read patient initials from the pre-mask
-               image in memory, then store ONLY the redacted image,
-               ticket=pending_review
+Ingest (`ingest_image`) is used by POST /images:
+    bytes (in memory) -> preprocess -> detect template -> store -> pending_review
 
 Batch processing (`run_batch`) is used by POST /batches/run and the scheduler:
-    for each pending ticket -> load redacted image -> decode barcodes
-      -> resolve refs -> vision fallback -> score + persist -> write workbook
+    for each pending ticket -> load image -> decode barcodes
+      -> resolve refs -> vision read -> score + persist -> write workbook
+
+`run_batch` reports how many tickets came back with nothing read. That number
+is the difference between a finished batch and a batch that only looks finished:
+barcodes decode locally, so a total failure of the vision read still produces a
+full-looking spreadsheet with every handwritten field blank.
 """
 from __future__ import annotations
 
@@ -19,109 +20,64 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.db import db
-from app.pipeline import assemble, barcode, patient, preprocess, vision
-from app.pipeline.redact import redact_patient_region
+from app.pipeline import assemble, barcode, preprocess, vision
+from app.pipeline import transient
 from app.pipeline.template import detect_template, geometry_for
-from app.storage import REDACTED_IMAGES, get_object, put_object, split_ref
+from app.storage import TICKET_IMAGES, get_object, put_object, split_ref
 
 log = logging.getLogger("pipeline.run")
 
 
 def _is_transient(exc: Exception) -> bool:
-    """True for connection-level failures worth retrying — chiefly the HTTP/2
-    GOAWAY / ConnectionTerminated the shared Supabase client throws when several
-    tickets are processed at once, plus the usual transient network/overload
-    errors. Matched by type and message so we don't hard-depend on h2/httpx/anthropic.
-    """
-    names = {type(exc).__name__}
-    for ctx in (exc.__cause__, exc.__context__):
-        if ctx is not None:
-            names.add(type(ctx).__name__)
-    transient_types = {
-        "ConnectionTerminated", "RemoteProtocolError", "ConnectError", "ConnectTimeout",
-        "ReadError", "ReadTimeout", "WriteError", "PoolTimeout", "ConnectionError",
-        "APIConnectionError", "APITimeoutError", "RateLimitError", "InternalServerError",
-        "ServerDisconnectedError",
-    }
-    if names & transient_types:
-        return True
-    blob = f"{type(exc).__name__}: {exc}".lower()
-    return any(k in blob for k in (
-        "connectionterminated", "goaway", "server disconnected", "connection reset",
-        "connection aborted", "overloaded", "timed out", "timeout",
-        "502", "503", "504", "529",
-    ))
+    """Retryable? Delegates to the shared rule so the vision call and this
+    retry loop can never disagree about what counts as transient."""
+    return transient.is_transient(exc)
 
 
 def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
-    """Redact + store one ticket image. Returns {ticket_id, status}.
+    """Store one ticket image. Returns {ticket_id, status}.
 
-    Raw bytes live only in memory here; only the redacted image is ever stored.
+    There used to be a patient-sticker mask here, and a gate that sent a ticket
+    to the manual queue whenever the mask could not be proven to have landed.
+    Both are gone: storage is HIPAA-compliant, so masking was not buying the
+    protection it cost. What it cost was real — the band was positioned by fixed
+    fractional coordinates, so on a differently-framed photo it clipped the
+    Surgery Date and the Surgeon out of the header, and a ticket that failed the
+    gate produced zero rows in the deliverable while still appearing complete.
     """
     img = preprocess.decode_image(data)
-    # No heavy enhancement here: redaction needs only the template geometry, and
-    # storing the *original* (minus the patient box) keeps the DataMatrix and
-    # printed text crisp for extraction — denoising both costs seconds per upload
-    # and degrades barcode decoding. (FIELD_GUIDE §9 still holds: we store only
-    # the redacted image, never the raw one.)
     template = detect_template(img, filename)
-    redacted, located = redact_patient_region(img, template)
 
-    if not located:
-        # Fail safe: cannot prove PHI is masked -> manual queue, store nothing.
+    # Encode before persisting anything, so a ticket never points at bytes we
+    # could not write. A re-encode also normalises whatever the phone produced
+    # into the one format the rest of the pipeline expects.
+    stored_bytes = preprocess.encode_image(img, ".jpg") if img is not None else b""
+    if not stored_bytes:
         ticket = db.create_ticket({
             "batch_id": batch_id,
             "source_image_path": None,
             "source_filename": filename or None,
             "entity": template if template != "Unknown" else None,
             "status": "manual_queue",
-            "flags": ["Patient region could not be located — manual review required"],
+            "flags": ["Could not read this image — manual review required"],
         })
-        log.info("ticket %s routed to manual_queue (%s)", ticket["ticket_id"], filename)
-        return {"ticket_id": ticket["ticket_id"], "status": "manual_queue"}
-
-    # Encode the redacted image BEFORE persisting anything. If encoding fails we
-    # cannot prove the stored bytes are masked, so we must never fall back to the
-    # raw upload (that would leak PHI). Fail safe to manual_queue, store nothing.
-    redacted_bytes = preprocess.encode_image(redacted, ".jpg")
-    if not redacted_bytes:
-        ticket = db.create_ticket({
-            "batch_id": batch_id,
-            "source_image_path": None,
-            "source_filename": filename or None,
-            "entity": template,
-            "status": "manual_queue",
-            "flags": ["Could not encode a redacted image — manual review required"],
-        })
-        log.info("ticket %s routed to manual_queue (encode failed, %s)",
+        log.info("ticket %s routed to manual_queue (undecodable, %s)",
                  ticket["ticket_id"], filename)
         return {"ticket_id": ticket["ticket_id"], "status": "manual_queue"}
 
-    # The redaction gate has passed, so we know the patient region was located
-    # on a known template. ONLY now — and only when the flag is on — do we read
-    # the two patient initials off the still-in-memory pre-mask image. A ticket
-    # that failed either check above has already returned, having sent its image
-    # nowhere. What gets stored below is still the redacted image.
-    initials = patient.extract_initials(img, template)
-
-    # Store ONLY the redacted image. If the store fails, flip the ticket to
-    # manual_queue (rather than leave a pending ticket pointing at nothing) and
-    # let the caller report the failure.
     ticket = db.create_ticket({
         "batch_id": batch_id,
         "entity": template,
         "source_filename": filename or None,
         "status": "pending_review",
-        "patient_initials": initials["value"],
-        "patient_initials_conf": initials["confidence"],
     })
     try:
-        ref = put_object(REDACTED_IMAGES, f"{ticket['ticket_id']}.jpg",
-                         redacted_bytes, "image/jpeg")
+        ref = put_object(TICKET_IMAGES, f"{ticket['ticket_id']}.jpg",
+                         stored_bytes, "image/jpeg")
     except Exception:
         db.update_ticket(ticket["ticket_id"], {
             "status": "manual_queue",
-            "flags": ["Could not store the redacted image — manual review required"],
+            "flags": ["Could not store the image — manual review required"],
         })
         raise
     db.update_ticket(ticket["ticket_id"], {"source_image_path": ref})
@@ -144,15 +100,15 @@ def process_ticket(ticket: dict) -> dict:
     """Run extraction for a single pending ticket and persist the result."""
     ticket_id = ticket["ticket_id"]
     img = None
-    redacted_bytes = b""
+    image_bytes = b""
     ref = ticket.get("source_image_path")
     if ref:
         try:
             bucket, path = split_ref(ref)
-            redacted_bytes = get_object(bucket, path)
-            img = preprocess.decode_image(redacted_bytes)
+            image_bytes = get_object(bucket, path)
+            img = preprocess.decode_image(image_bytes)
         except Exception as e:  # pragma: no cover
-            log.warning("could not load redacted image for %s: %s", ticket_id, e)
+            log.warning("could not load the image for %s: %s", ticket_id, e)
 
     template = ticket.get("entity") or "Maxx Orthopedics"
 
@@ -162,8 +118,8 @@ def process_ticket(ticket: dict) -> dict:
     grid = _grid_crop(img, template)
     labels = barcode.drop_junk_labels(barcode.decode_region(grid)) if grid is not None else []
 
-    # Vision fallback: header, prices, qty, totals (single call on redacted bytes).
-    vresult = vision.extract_handwritten(redacted_bytes) if redacted_bytes else vision.extract_handwritten(b"")
+    # The vision read: header, prices, qty, totals. One call per ticket.
+    vresult = vision.extract_handwritten(image_bytes)
 
     # If vision returned more priced lines than decoded labels, pad with empty
     # label dicts so vision-only lines still appear (barcode failed on those).
@@ -175,25 +131,27 @@ def process_ticket(ticket: dict) -> dict:
     return summary
 
 
-def _safe_process(ticket: dict, attempts: int = 4) -> None:
+def _safe_process(ticket: dict, attempts: int = 4) -> dict:
     """Process one ticket, retrying transient connection failures.
 
     The shared Supabase HTTP/2 client throws ConnectionTerminated (GOAWAY) when
     several tickets run at once; re-processing is idempotent (assemble clears the
     ticket's prior rows first), so a retry cleanly replaces any partial write.
     A non-transient error (or the final attempt) flags the ticket and returns.
+
+    Returns the ticket summary so run_batch can report how the batch actually
+    went — in particular how many tickets came back with nothing read.
     """
     for attempt in range(attempts):
         try:
-            process_ticket(ticket)
-            return
+            return process_ticket(ticket)
         except Exception as e:  # pragma: no cover - network-timing dependent
             if attempt < attempts - 1 and _is_transient(e):
                 time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
                 continue
             log.exception("failed to process ticket %s: %s", ticket.get("ticket_id"), e)
             db.update_ticket(ticket["ticket_id"], {"flags": [f"Processing error: {e}"]})
-            return
+            return {"ticket_id": ticket.get("ticket_id"), "vision_error": str(e)}
 
 
 def run_batch(batch_id: str | None = None) -> dict:
@@ -210,12 +168,17 @@ def run_batch(batch_id: str | None = None) -> dict:
     # releases the GIL), one vision API call (network), and bulk DB writes
     # (network) — all I/O-bound, so threads overlap the latency. Capped to keep
     # the vision API within sane concurrency.
+    vision_failures = 0
     if pending:
         # Cap concurrency low: the work shares one Supabase HTTP/2 client, and too
         # many simultaneous tickets trigger GOAWAY/ConnectionTerminated. Retries
         # cover the residual; bulk writes keep each ticket cheap regardless.
         with ThreadPoolExecutor(max_workers=min(3, len(pending))) as ex:
-            list(ex.map(_safe_process, pending))
+            summaries = list(ex.map(_safe_process, pending))
+        vision_failures = sum(1 for r in summaries if (r or {}).get("vision_error"))
+        if vision_failures:
+            log.error("%d of %d tickets came back with nothing read",
+                      vision_failures, len(pending))
 
     # Determine the batch to render.
     if batch_id is None:
@@ -236,4 +199,5 @@ def run_batch(batch_id: str | None = None) -> dict:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     db.update_batch(batch_id, {"output_sheet_path": sheet_path, "ticket_count": len(tickets)})
-    return {"batch_id": batch_id, "sheet_path": sheet_path, "ticket_count": len(tickets)}
+    return {"batch_id": batch_id, "sheet_path": sheet_path,
+            "ticket_count": len(tickets), "vision_failures": vision_failures}

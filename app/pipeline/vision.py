@@ -7,18 +7,31 @@ prose. Model confidence is an INPUT to scoring, not the final cell colour.
 
 If Anthropic isn't configured (OFFLINE_MODE / no key) this returns an empty,
 well-formed result so the deterministic path still produces a sheet.
+
+Failures are never silent. Every empty result says why it is empty, because a
+whole batch once came back with nothing but barcode data and reported success:
+an unread ticket and a blank ticket produced byte-identical output, so 54% of
+the deliverable went red with no indication that the extraction had never run.
 """
 from __future__ import annotations
 
 import base64
 import json
+import logging
 
 from app.config import settings
+from app.pipeline import transient
+
+log = logging.getLogger("pipeline.vision")
 
 SYSTEM_PROMPT = """\
-You extract fields from a redacted orthopedic implant usage ticket (Maxx
-Orthopedics or Maxx Health). The patient area has been masked; ignore any
-masked region and never infer patient information.
+You extract fields from an orthopedic implant usage ticket (Maxx Orthopedics or
+Maxx Health).
+
+The ticket carries a patient sticker. Read NOTHING from it except the patient's
+two initials, and return nothing else about the patient in any field, under any
+circumstances — not the name, date of birth, medical record number, account
+number, sex, admission date or address.
 
 Return ONLY a JSON object, no prose and no markdown fences. For every field
 return {"value": <value or null>, "confidence": "high"|"medium"|"low"}.
@@ -29,7 +42,8 @@ Shape:
 {
   "header": {
     "entity": {...}, "rep": {...}, "rep_code": {...}, "surgeon": {...},
-    "hospital": {...}, "surgery_date": {...}, "po_number": {...}
+    "hospital": {...}, "surgery_date": {...}, "po_number": {...},
+    "patient_initials": {...}
   },
   "lines": [ {"index": <int>, "ref": {...}, "lot": {...}, "qty": {...},
              "unit_price": {...}, "wasted": {...}, "description": {...}} ],
@@ -109,6 +123,11 @@ earlier label. For these lines:
   - "wasted": false unless a "W" or "I/O" is marked.
   - "qty": null unless a count is written.
 
+"patient_initials" is exactly two uppercase letters: the first letter of the
+given name and the first letter of the family name, from the patient sticker.
+Ignore middle names and middle initials. Return null if you cannot read both
+names clearly — do not guess. Two letters and nothing more.
+
 Dates as ISO YYYY-MM-DD. "lines" is ordered top-to-bottom: labelled implant
 lines first, then secondary partner labels, then handwritten form lines.
 
@@ -118,20 +137,32 @@ that was not read. "description" is null on every line except the handwritten
 ones.
 """
 
-_EMPTY = {
-    "header": {
-        "entity": {"value": None, "confidence": "low"},
-        "rep": {"value": None, "confidence": "low"},
-        "rep_code": {"value": None, "confidence": "low"},
-        "surgeon": {"value": None, "confidence": "low"},
-        "hospital": {"value": None, "confidence": "low"},
-        "surgery_date": {"value": None, "confidence": "low"},
-        "po_number": {"value": None, "confidence": "low"},
-    },
-    "lines": [],
-    "freight": {"value": None, "confidence": "low"},
-    "grand_total": {"value": None, "confidence": "low"},
-}
+def _empty(error: str | None = None) -> dict:
+    """A well-formed result with nothing in it.
+
+    ``error`` is the difference between "this ticket was blank" and "we never
+    got an answer". Before it existed, a missing API key, an HTTP 500 and an
+    unparseable response all produced the identical dict, so a total extraction
+    outage was indistinguishable from nine genuinely empty tickets — which is
+    exactly how one went unnoticed for a whole batch. Callers that see an error
+    set MUST surface it; see assemble._vision_failure_flag.
+    """
+    return {
+        "header": {
+            "entity": {"value": None, "confidence": "low"},
+            "rep": {"value": None, "confidence": "low"},
+            "rep_code": {"value": None, "confidence": "low"},
+            "surgeon": {"value": None, "confidence": "low"},
+            "hospital": {"value": None, "confidence": "low"},
+            "surgery_date": {"value": None, "confidence": "low"},
+            "po_number": {"value": None, "confidence": "low"},
+            "patient_initials": {"value": None, "confidence": "low"},
+        },
+        "lines": [],
+        "freight": {"value": None, "confidence": "low"},
+        "grand_total": {"value": None, "confidence": "low"},
+        "error": error,
+    }
 
 
 def _strip_fences(text: str) -> str:
@@ -144,24 +175,54 @@ def _strip_fences(text: str) -> str:
     return t.strip()
 
 
-def _parse(text: str) -> dict:
+def _parse(text: str, stop_reason: str | None = None) -> dict:
+    """Parse the model's JSON, or say why we couldn't.
+
+    A truncated response is the failure mode worth naming: thinking and output
+    share one max_tokens allowance, so a long deliberation can cut the JSON off
+    mid-object. That used to come back as a silent empty result — a billed call
+    that looked exactly like a blank ticket.
+    """
+    if stop_reason == "max_tokens":
+        log.error("vision response truncated at max_tokens (%d chars of text)", len(text))
+        return _empty(error="response truncated at max_tokens")
     try:
         return json.loads(_strip_fences(text))
-    except Exception:
-        return json.loads(json.dumps(_EMPTY))  # deep copy of empty
+    except Exception as e:
+        log.error("vision response was not JSON (%s); first 200 chars: %r", e, text[:200])
+        return _empty(error=f"unparseable response: {e}")
 
 
 def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg") -> dict:
     """Single Claude call. Returns the JSON-parsed per-field result.
 
-    Empty well-formed result when vision is unavailable, so downstream code is
-    uniform whether or not the API is configured.
+    Always a well-formed result, so downstream code is uniform whether or not
+    the API is configured — but a result that came back empty because something
+    went wrong carries ``error``, and callers must surface it. A transient
+    failure is raised instead, so the ticket is retried rather than recorded as
+    empty.
     """
-    if not settings.has_anthropic or not redacted_img_bytes:
+    if not settings.has_anthropic:
+        from app.pipeline import tracer
+        # OFFLINE_MODE is a deliberate choice — the deterministic path is the
+        # whole point of it, so it is not an error. A missing key in a live
+        # deployment is a misconfiguration, and saying so is how the next
+        # silent outage gets noticed on the first ticket instead of the ninth.
+        deliberate = settings.offline_mode
+        reason = ("offline mode" if deliberate
+                  else "no Anthropic API key configured")
+        tracer.record("vision_ai", "Vision AI extraction", "skip",
+                      f"Skipped — {reason}", {})
+        if deliberate:
+            return _empty()
+        log.error("vision unavailable: %s", reason)
+        return _empty(error=reason)
+    if not redacted_img_bytes:
         from app.pipeline import tracer
         tracer.record("vision_ai", "Vision AI extraction", "skip",
-                      "Skipped — no Anthropic API key configured or empty image", {})
-        return json.loads(json.dumps(_EMPTY))
+                      "Skipped — no image bytes for this ticket", {})
+        log.warning("vision skipped: no image bytes")
+        return _empty(error="no image bytes for this ticket")
 
     try:
         import anthropic
@@ -170,8 +231,17 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         b64 = base64.standard_b64encode(redacted_img_bytes).decode("ascii")
         resp = client.messages.create(
             model=settings.anthropic_model,
-            max_tokens=8000,
-            thinking={"type": "adaptive"},
+            # max_tokens covers thinking AND output together. Adaptive thinking
+            # with an 8000 cap is what is believed to have emptied a whole batch:
+            # a longer system prompt bought longer deliberation, the JSON was cut
+            # off mid-object, and the parser turned that into an empty result. A
+            # fixed budget cannot expand to crowd the answer out, and 16000 - 4000
+            # leaves far more room for the JSON than any ticket needs.
+            max_tokens=16000,
+            thinking={"type": "enabled", "budget_tokens": 4000},
+            # A hung call otherwise holds one of the three batch workers for the
+            # SDK default (10 minutes).
+            timeout=180.0,
             # Sonnet 5 defaults to "high" when effort is unset. "medium" is the
             # cost/quality knob for the per-ticket read; watch the amber/red rate
             # in History after changing it — that's the regression signal.
@@ -207,9 +277,11 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         text = "".join(
             block.text for block in resp.content if getattr(block, "type", None) == "text"
         )
-        result = _parse(text)
+        stop_reason = getattr(resp, "stop_reason", None)
+        result = _parse(text, stop_reason)
         from app.pipeline import tracer
         line_count = len(result.get("lines") or [])
+        err = result.get("error")
         usage = getattr(resp, "usage", None)
         tokens_in = getattr(usage, "input_tokens", None)
         tokens_out = getattr(usage, "output_tokens", None)
@@ -221,10 +293,13 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
         tracer.record(
             "vision_ai",
             f"Vision AI extraction ({settings.anthropic_model})",
-            "ok" if line_count > 0 else "warn",
-            f"{settings.anthropic_model} — {line_count} line(s) found{token_str}",
+            "fail" if err else ("ok" if line_count > 0 else "warn"),
+            (f"FAILED — {err}" if err
+             else f"{settings.anthropic_model} — {line_count} line(s) found{token_str}"),
             {
                 "model": settings.anthropic_model,
+                "stop_reason": stop_reason,
+                "error": err,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "cache_read_input_tokens": cache_read,
@@ -235,7 +310,18 @@ def extract_handwritten(redacted_img_bytes: bytes, media_type: str = "image/jpeg
                 "grand_total": result.get("grand_total"),
             },
         )
+        if err:
+            log.error("vision extraction produced no usable result: %s", err)
         return result
-    except Exception:
-        # Never let a vision failure sink the batch; emit empty + let cells go red.
-        return json.loads(json.dumps(_EMPTY))
+    except Exception as e:
+        # A transient failure is re-raised so run._safe_process can retry the
+        # ticket. It could never do that before: this handler swallowed the
+        # RateLimitError / APITimeoutError / 529 that _is_transient was written
+        # to catch, so the retry loop was unreachable from the vision path.
+        if transient.is_transient(e):
+            log.warning("transient vision failure, will retry: %s", e)
+            raise
+        # Anything else: the batch still finishes, but the ticket is marked so
+        # nobody mistakes an outage for a blank ticket.
+        log.exception("vision extraction failed")
+        return _empty(error=f"{type(e).__name__}: {e}")
