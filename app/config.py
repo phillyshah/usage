@@ -15,6 +15,27 @@ class Settings(BaseSettings):
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
     )
 
+    # --- Which service reads the tickets ---
+    # "anthropic" | "openrouter". Defaults to anthropic so an existing
+    # deployment that sets nothing behaves exactly as it did. Switching is one
+    # variable and a restart, runtime-only — never a build arg, like every
+    # other credential here.
+    vision_provider: str = "anthropic"
+
+    # --- OpenRouter (open-weight models) ---
+    openrouter_api_key: str = ""
+    # A DEFAULT, NOT A GUESS. OpenRouter's catalogue is namespaced
+    # (vendor/model) and it moves — models are added, renamed and retired, and
+    # which of them accept IMAGES varies. This one was chosen for this job:
+    # open-weight, vision-capable, and strong enough at reasoning to do the
+    # part that is actually hard here — matching prices to labels and
+    # reconciling to the grand total, not character recognition.
+    openrouter_model: str = "qwen/qwen3-vl-235b-a22b-instruct"
+    # The backup OpenRouter walks to when the first cannot serve the request.
+    # It MUST also accept images; the text-only fallback the dashboard uses
+    # would fail every ticket here. Set to "none" to send no fallback.
+    openrouter_fallback_model: str = "qwen/qwen3-vl-32b-instruct"
+
     # --- Anthropic (vision fallback) ---
     anthropic_api_key: str = ""
     # The current Sonnet. NOTE: the VPS .env sets ANTHROPIC_MODEL, and that
@@ -82,6 +103,16 @@ class Settings(BaseSettings):
     @property
     def has_anthropic(self) -> bool:
         return bool(self.anthropic_api_key) and not self.offline_mode
+
+    @property
+    def has_vision(self) -> bool:
+        """Is SOME reader configured? Provider-agnostic on purpose: every
+        caller that used to ask has_anthropic really meant this."""
+        if self.offline_mode:
+            return False
+        if (self.vision_provider or "").strip().lower() == "openrouter":
+            return bool(self.openrouter_api_key)
+        return bool(self.anthropic_api_key)
 
 
 @lru_cache

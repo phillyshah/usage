@@ -174,7 +174,7 @@ def run_batch(batch_id: str | None = None) -> dict:
     # small call answers in seconds, where nine tickets answered in minutes and
     # left every one of them marked processed. Skipped in OFFLINE_MODE, where
     # the deterministic path is the whole point.
-    if settings.has_anthropic:
+    if settings.has_vision:
         probe = vision.check_connection()
         if not probe["ok"]:
             log.error("batch aborted — the AI reader is unreachable: %s", probe["error"])

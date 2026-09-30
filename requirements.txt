@@ -12,6 +12,10 @@ supabase
 # ceiling stops a major release changing them under us. A floor rather than an
 # exact pin so this cannot downgrade a working deployment.
 anthropic>=1.8.0,<2
+# OpenRouter implements the OpenAI chat-completions surface, so the official
+# OpenAI SDK is the client for it — pointed at a different base URL. Only used
+# when VISION_PROVIDER=openrouter.
+openai>=1.60,<3
 openpyxl
 pillow
 numpy

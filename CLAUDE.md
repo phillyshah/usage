@@ -32,8 +32,21 @@ re-litigating, and open threads.
   clipped Surgery Date and Surgeon out of the header on differently-framed
   photos, and its `located=False` path silently produced tickets with zero rows.
   The ticket image is sent and stored whole, patient sticker included.
-- **The Anthropic BAA is load-bearing.** It always mattered; it now covers the
-  main extraction call, which sends the full ticket image rather than a crop.
+- **The ticket image is sent unmasked, and one provider has no BAA.** The whole
+  image — patient name, DOB, MRN, CSN — goes to whichever reader
+  `VISION_PROVIDER` selects.
+  - `anthropic` (default): the BAA is load-bearing and now covers the main
+    extraction call, not just a crop.
+  - `openrouter`: **no BAA exists.** OpenRouter does not publish one, and it is
+    a router, so the request is handed to an upstream provider as well. Andy
+    was shown this and approved it on 2026-09-30 to cut cost (~$78/mo → ~$7/mo).
+    Recorded so it reads as a decision somebody made rather than a default
+    nobody saw. Two consequences: `OPENROUTER_PRIVACY` sends
+    `data_collection: deny` on every request, and OpenRouter's **own** prompt
+    logging is an account setting (Settings → Privacy) that no code here can
+    touch — it has to be turned off in their console.
+  - Re-masking is the standing alternative if that posture ever changes; the
+    old geometry is in git history at `app/pipeline/redact.py` (removed 2.19.0).
 - **`EXTRACT_PATIENT_INITIALS`** (currently **on** in prod) decides whether the
   patient's two initials are **kept**, not whether they are read — the model
   sees the sticker either way. Off means `assemble.py` discards them and nothing

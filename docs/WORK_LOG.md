@@ -16,13 +16,14 @@ Last updated: 2026-09-30.
 
 | | |
 |---|---|
-| Version in `main` | **2.19.0** (PR #48); **2.20.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Version in `main` | **2.20.0** (PR #49); **2.21.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
+| Reader | `VISION_PROVIDER` — `anthropic` (default) or `openrouter` from 2.21.0 |
 | Model | `claude-sonnet-5-5` from 2.20.0 — **but the VPS `.env` pins `ANTHROPIC_MODEL` and wins**, so the move needs an `.env` edit as well as a pull |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 395 passed, 2 skipped |
+| Tests | 416 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -516,6 +517,64 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.21.0 — A second reader, because the first one hit a spend cap
+
+The 2.20.0 preflight paid for itself on its first run. Andy deployed, hit the
+button, and got the answer in seconds:
+
+> You have reached your specified API usage limits. You will regain access on
+> 2026-10-01 at 00:00 UTC.
+
+**Not a bug — a spend cap on the Anthropic account, on the last day of the
+month.** Which almost certainly means the *original* Sep 30 outage was this too:
+a monthly cap hitting at month-end produces exactly what was seen — every ticket
+failing deterministically on a day that had worked five days earlier. The
+`max_tokens` truncation theory recorded under 2.19.0 is therefore probably
+**wrong**; it is left in place because the raise to 16000 is right regardless and
+because a theory that was superseded is worth seeing next to the thing that
+superseded it.
+
+So: `VISION_PROVIDER` selects `anthropic` (default, so a deployment that sets
+nothing is unchanged) or `openrouter`, for open-weight models at roughly a tenth
+of the cost — ~$78/mo to ~$7/mo at this volume.
+
+**The pattern is ported from maxxdash** (`apps/dashboard/lib/assistant-provider.ts`),
+which had already solved this and reasoned it through: a provider setting whose
+variable NAMES travel with the configuration, a `data_collection: deny` constant
+rather than a setting somebody flips to make a failing model work, and a
+router-side `models` array instead of a second retry loop in our code. Two
+deliberate departures:
+
+- **The fallback had to change.** maxxdash falls back to `deepseek/deepseek-v3.2`,
+  which is text-only. Copied as-is it would have failed every ticket the moment
+  the router walked to it. Ours is `qwen/qwen3-vl-32b-instruct`.
+- **The model is chosen for reasoning, not OCR.** Specialised OCR models now beat
+  large general VLMs on document benchmarks outright, but the hard part of these
+  tickets is not character recognition — it is matching handwritten prices to the
+  right labels, spotting wasted components, and reconciling to the grand total.
+  That is reasoning over a page, so `qwen/qwen3-vl-235b-a22b-instruct`.
+
+**Only the transport differs.** `_call_anthropic` and `_call_openrouter` build a
+request and read an answer; everything that two outages bought — the error
+marker, the truncation check, the refusal check, the retry classification, the
+trace — is shared, and OpenAI-compatible `finish_reason` values are mapped onto
+the vocabulary `_parse` already speaks. A second copy of that logic would be a
+second place for a failure to go quiet, which is the whole lesson of 2.19.0 and
+2.20.0.
+
+**PHI, stated plainly because it is the cost of this change.** The ticket image
+is sent whole, patient sticker included, and **OpenRouter publishes no BAA** —
+nor does the upstream provider it routes to. Masking was offered and declined;
+Andy approved sending unmasked on 2026-09-30 to cut cost. The standing rule now
+lives in CLAUDE.md so it is a decision on the record. Two things do not follow
+from the code and have to be done in their console: OpenRouter's own prompt
+logging is an account setting, and the alternative — re-masking — would mean
+restoring `app/pipeline/redact.py` from git history.
+
+Worth noting for whoever reads this next: an automated guard blocked two
+attempts to write this paragraph before it was approved. It was reading the
+situation correctly.
 
 ### 2.20.0 — The fix that broke it a second way
 
