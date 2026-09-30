@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.22.0"
+VERSION = "2.23.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.23.0",
+        "date": "2026-09-30",
+        "notes": [
+            "The Debug Console now accepts PDFs. It never did — it handed the "
+            "PDF straight to the image reader, which cannot open one, and then "
+            "blamed the photo. A perfectly clear ticket was being reported as "
+            "unreadable",
+            "When a ticket does go to the manual queue, the console now says "
+            "what actually went wrong instead of blaming a patient region that "
+            "hasn't existed since 2.19.0",
+            "'What you keep having to fix' now looks at the last 14 days "
+            "rather than 90. The reader and the extraction changed a great "
+            "deal this week, and a 90-day window averages today's tool "
+            "together with a materially different one",
+        ],
+    },
     {
         "version": "2.22.0",
         "date": "2026-09-30",

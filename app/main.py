@@ -747,11 +747,20 @@ def metrics_auto_resolve_daily(days: int = 14):
 
 
 @app.get("/metrics/accuracy")
-def metrics_accuracy(days: int = 90):
+def metrics_accuracy(days: int = 14):
     """Which fields humans actually have to fix, worst first.
 
-    90 days rather than the 14 the daily charts use: corrections are far
-    sparser than batches, and a fortnight of them says nothing.
+    14 days, deliberately short. This started at 90 on the reasoning that
+    corrections are sparser than batches, so a fortnight of them says nothing —
+    which was true while the extraction was stable. It stopped being true in
+    the week the reader changed provider, the confidence policy was rewritten
+    and three extraction defects were fixed: a 90-day window averages today's
+    tool together with a materially different one and reports the blend as if
+    it were the current state.
+
+    A short window over the current build beats a long one over three of them.
+    Widen it again once things have been quiet for a while — `?days=` overrides
+    it without a deploy.
     """
     from app.metrics import correction_accuracy
 
@@ -864,21 +873,49 @@ async def debug_trace(file: UploadFile = File(...)):
     ctx = contextvars.copy_context()
 
     def _run():
+        from app.pipeline import pdf
+
+        # PDFs have to be rendered to pages before anything can decode them.
+        # /images has always done this; THIS route never learned to, so it
+        # handed raw PDF bytes to OpenCV, got nothing back, and binned a
+        # perfectly good ticket as unreadable. The console is single-ticket by
+        # design, so page 1 is traced and any others are named rather than
+        # silently ignored.
+        page_data, page_name, extra = data, filename, None
+        if pdf.is_pdf(data):
+            pages = pdf.pdf_to_page_images(data)
+            if not pages:
+                return {
+                    "ticket_id": None, "filename": filename, "status": "error",
+                    "steps": [],
+                    "result": {"error": "Could not read this PDF — it may be "
+                                        "empty or corrupt."},
+                }
+            stem = (filename or "ticket").rsplit(".", 1)[0]
+            page_data, page_name = pages[0], f"{stem}-p1"
+            if len(pages) > 1:
+                extra = (f"This PDF has {len(pages)} pages. The console traces "
+                         f"one ticket, so this is page 1 — upload the file in "
+                         f"step 1 to process every page.")
+
         batch = db.create_batch()
-        ingest_result = ingest_image(data, filename, batch["id"])
+        ingest_result = transient.retry(ingest_image, page_data, page_name,
+                                        batch["id"], label=page_name)
         ticket_id = ingest_result["ticket_id"]
 
         if ingest_result["status"] != "pending_review":
+            # Say what actually went wrong. This used to blame a patient region
+            # that has not existed since 2.19.0, which sent people hunting for
+            # a photo-quality problem that was not there.
+            stored = db.get_ticket(ticket_id) or {}
+            why = "; ".join(str(f) for f in (stored.get("flags") or [])) \
+                or "the image could not be read"
             return {
                 "ticket_id": ticket_id,
-                "filename": filename,
+                "filename": page_name,
                 "status": ingest_result["status"],
                 "steps": [],
-                "result": {"error": (
-                    "Patient region not located — ticket routed to manual queue. "
-                    "Check that the image is a clear, unobstructed photo of a "
-                    "Maxx Orthopedics or Maxx Health usage ticket."
-                )},
+                "result": {"error": f"This ticket went to the manual queue: {why}"},
             }
 
         ticket = db.get_ticket(ticket_id)
@@ -893,6 +930,8 @@ async def debug_trace(file: UploadFile = File(...)):
         # per-line trace-step details (which lack line_id and header confidence).
         from app.pipeline.assemble import TICKET_FIELDS, confidence_map_for_ticket
 
+        if extra:
+            result.setdefault("notes", []).append(extra)
         final_ticket = db.get_ticket(ticket_id) or {}
         final_lines = db.lines_for_ticket(ticket_id)
         final_lines.sort(key=lambda r: r.get("created_at") or "")
@@ -910,7 +949,9 @@ async def debug_trace(file: UploadFile = File(...)):
 
         return {
             "ticket_id": ticket_id,
-            "filename": filename,
+            # The PAGE name, not the uploaded file's — for a PDF the two differ,
+            # and the console is showing one page's ticket.
+            "filename": page_name,
             "status": "ok",
             "steps": steps,
             "result": result,

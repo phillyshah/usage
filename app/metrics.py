@@ -153,7 +153,7 @@ def _short(v) -> str:
     return v if len(v) <= _EXAMPLE_CHARS else v[:_EXAMPLE_CHARS - 1] + "…"
 
 
-def correction_accuracy(days: int = 90) -> dict:
+def correction_accuracy(days: int = 14) -> dict:
     """Which fields humans actually have to fix, and how badly.
 
     The three splits mean different things and point at different fixes:

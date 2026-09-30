@@ -958,7 +958,7 @@ const fieldLabel = (f) => FIELD_LABELS[f] || f;
 async function loadAccuracy() {
   let d;
   try {
-    d = await api.accuracyMetrics(90);
+    d = await api.accuracyMetrics(14);
   } catch {
     return;                       // panel simply stays empty
   }
