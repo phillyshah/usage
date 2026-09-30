@@ -5,9 +5,25 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.24.0"
+VERSION = "2.25.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.25.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Tickets are now read twice when it's worth it. The cheaper model "
+            "reads everything; any ticket left with an empty Price, Surgeon, "
+            "Hospital or Date is re-read by Claude Opus, which is the best "
+            "reader available",
+            "That only happens where there's a real gap, so the cost follows "
+            "how often the first reader struggles rather than how many tickets "
+            "you upload — cheaper than reading everything with Claude, and "
+            "more accurate than reading everything with the cheaper model",
+            "The ticket says when it was re-read and which cells prompted it, "
+            "and says so too when the second read couldn't fill them either",
+        ],
+    },
     {
         "version": "2.24.0",
         "date": "2026-09-30",

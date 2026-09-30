@@ -277,7 +277,83 @@ def _parse(text: str, stop_reason: str | None = None) -> dict:
         return _empty(error=f"unparseable response: {e}")
 
 
-def _request_params() -> dict:
+def escalation_configuration() -> tuple[dict | None, str | None]:
+    """The stronger second reader, or why there isn't one.
+
+    Claude re-reads only the tickets the primary left with a real gap, so the
+    bill scales with the failure rate rather than with volume. At around a tenth
+    of tickets escalating this is cheaper than reading everything with Claude
+    and more accurate than reading everything with the open-weight model.
+    """
+    model = (settings.vision_escalate_model or "").strip()
+    if not model or model.lower() == "none":
+        return None, "escalation is turned off (VISION_ESCALATE_MODEL)"
+    if settings.offline_mode:
+        return None, "OFFLINE_MODE is on"
+    if not (settings.anthropic_api_key or "").strip():
+        return None, "ANTHROPIC_API_KEY is not set, so there is nothing to escalate to"
+    return {"provider": "anthropic", "model": model}, None
+
+
+def escalate_fields() -> set[str]:
+    """The cells worth paying a second reader for.
+
+    A blank Lot or Expiry is recoverable — from the barcode, from the Expiry
+    Log. These are not recoverable from anywhere, and they are what the invoice
+    is built from.
+    """
+    raw = settings.vision_escalate_fields or ""
+    return {f.strip() for f in raw.split(",") if f.strip()}
+
+
+def _first_non_null(*fields):
+    """The first field that actually carries a value.
+
+    The escalated read wins where it read something, and the primary fills what
+    the escalation missed — so the merge is never worse than either read alone.
+    """
+    for f in fields:
+        if isinstance(f, dict) and f.get("value") not in (None, ""):
+            return f
+    for f in fields:
+        if f is not None:
+            return f
+    return {"value": None, "confidence": "low"}
+
+
+def merge_reads(primary: dict, escalated: dict) -> dict:
+    """Combine two reads of one ticket, escalation first.
+
+    Field by field rather than wholesale: the stronger reader is better on
+    average, not on every single cell, and a field the primary got right should
+    not regress because the second reader happened to miss it.
+    """
+    out = dict(escalated)
+    out["header"] = {}
+    for key in set(primary.get("header") or {}) | set(escalated.get("header") or {}):
+        out["header"][key] = _first_non_null(
+            (escalated.get("header") or {}).get(key),
+            (primary.get("header") or {}).get(key))
+    for key in ("freight", "grand_total"):
+        out[key] = _first_non_null(escalated.get(key), primary.get(key))
+
+    plines = primary.get("lines") or []
+    elines = escalated.get("lines") or []
+    merged = []
+    for i in range(max(len(plines), len(elines))):
+        p = plines[i] if i < len(plines) else {}
+        e = elines[i] if i < len(elines) else {}
+        row = {**p, **{k: v for k, v in e.items() if v is not None}}
+        for key in set(p) | set(e):
+            if isinstance(p.get(key), dict) or isinstance(e.get(key), dict):
+                row[key] = _first_non_null(e.get(key), p.get(key))
+        merged.append(row)
+    out["lines"] = merged
+    out["error"] = None
+    return out
+
+
+def _request_params(model: str | None = None) -> dict:
     """The model/thinking/effort parameters, in ONE place.
 
     The preflight below has to send exactly what the real extraction sends, or
@@ -286,7 +362,7 @@ def _request_params() -> dict:
     invisible until a batch failed.
     """
     return {
-        "model": settings.anthropic_model,
+        "model": model or settings.anthropic_model,
         # Adaptive is the ONLY on-mode for this model family. A fixed
         # `{"type": "enabled", "budget_tokens": N}` budget is rejected with a
         # 400 — that shipped once and every call failed for a whole release.
@@ -311,7 +387,8 @@ _FINISH_REASONS = {
 }
 
 
-def _call_anthropic(img: bytes, media_type: str, probe: bool = False):
+def _call_anthropic(img: bytes, media_type: str, probe: bool = False,
+                    model: str | None = None):
     """(text, stop_reason, usage) from Anthropic. Transport only."""
     import anthropic
 
@@ -320,12 +397,12 @@ def _call_anthropic(img: bytes, media_type: str, probe: bool = False):
         client.messages.create(
             max_tokens=1024, timeout=30.0,
             messages=[{"role": "user", "content": "Reply with the word: ok"}],
-            **_request_params(),
+            **_request_params(model),
         )
         return "", None, {}
 
     resp = client.messages.create(
-        **_request_params(),
+        **_request_params(model),
         # max_tokens covers thinking AND output together, and an 8000 cap is
         # what is believed to have emptied a whole batch: a longer system
         # prompt bought longer deliberation, the JSON was cut off mid-object,
@@ -365,7 +442,8 @@ def _call_anthropic(img: bytes, media_type: str, probe: bool = False):
     }
 
 
-def _call_openrouter(img: bytes, media_type: str, probe: bool = False):
+def _call_openrouter(img: bytes, media_type: str, probe: bool = False,
+                     model: str | None = None):
     """(text, stop_reason, usage) from OpenRouter. Transport only.
 
     OpenRouter implements the OpenAI chat-completions surface, so the official
@@ -384,7 +462,7 @@ def _call_openrouter(img: bytes, media_type: str, probe: bool = False):
             "image_url": {"url": f"data:{media_type};base64,{_b64(img)}"},
         })
     resp = client.chat.completions.create(
-        model=settings.openrouter_model,
+        model=model or settings.openrouter_model,
         max_tokens=1024 if probe else 16000,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -446,8 +524,14 @@ def check_connection() -> dict:
                 "provider": cfg["provider"], "error": f"{type(e).__name__}: {e}"}
 
 
-def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg") -> dict:
+def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg",
+                        escalate: bool = False) -> dict:
     """One call to the configured reader. Returns the per-field result.
+
+    ``escalate`` sends the ticket to the stronger second reader instead of the
+    primary. Everything else about the call — the prompt, the parsing, the
+    error marker, the trace — is identical, because a second reader that
+    reported its failures differently would be a second thing to keep right.
 
     Always a well-formed result, so downstream code is uniform whether or not a
     reader is configured — but a result that came back empty because something
@@ -457,7 +541,8 @@ def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg") -> dic
     """
     from app.pipeline import tracer
 
-    cfg, reason = vision_configuration()
+    cfg, reason = (escalation_configuration() if escalate
+                   else vision_configuration())
     if cfg is None:
         # OFFLINE_MODE is a deliberate choice — the deterministic path is the
         # whole point of it, so it is not an error. A missing key in a live
@@ -477,7 +562,8 @@ def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg") -> dic
 
     model = cfg["model"]
     try:
-        text, stop_reason, usage = _TRANSPORTS[cfg["provider"]](img_bytes, media_type)
+        text, stop_reason, usage = _TRANSPORTS[cfg["provider"]](
+            img_bytes, media_type, model=model)
 
         # A declined request comes back as a normal 200 with no text, so it
         # would otherwise fall through to the parser and be reported as
@@ -499,8 +585,8 @@ def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg") -> dic
         if usage.get("cache_read"):
             token_str += f" ({usage['cache_read']} cached)"
         tracer.record(
-            "vision_ai",
-            f"Vision AI extraction ({served})",
+            "vision_escalation" if escalate else "vision_ai",
+            f"{'Second read' if escalate else 'Vision AI extraction'} ({served})",
             "fail" if err else ("ok" if line_count > 0 else "warn"),
             (f"FAILED — {err}" if err
              else f"{served} — {line_count} line(s) found{token_str}"),

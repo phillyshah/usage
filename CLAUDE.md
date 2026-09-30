@@ -35,8 +35,10 @@ re-litigating, and open threads.
 - **The ticket image is sent unmasked, and one provider has no BAA.** The whole
   image — patient name, DOB, MRN, CSN — goes to whichever reader
   `VISION_PROVIDER` selects.
-  - `anthropic` (default): the BAA is load-bearing and now covers the main
-    extraction call, not just a crop.
+  - `anthropic`: the BAA is load-bearing and covers the main extraction call,
+    not just a crop. Since 2.25.0 it is also the **escalation** reader, so a
+    ticket with an unfilled cell goes to Claude even when the primary is
+    OpenRouter.
   - `openrouter`: **no BAA exists.** OpenRouter does not publish one, and it is
     a router, so the request is handed to an upstream provider as well. Andy
     was shown this and approved it on 2026-09-30 to cut cost (~$78/mo → ~$7/mo).

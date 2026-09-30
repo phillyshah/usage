@@ -12,6 +12,7 @@ genuinely empty ticket.
 So these tests are mostly about what the system SAYS, not what it computes.
 """
 import json
+from contextlib import ExitStack, contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,19 +41,28 @@ def _client(*, raises=None, text=None, stop_reason="end_turn"):
     return c
 
 
+@contextmanager
 def _live(client):
-    """Patch enough that extract_handwritten takes the real API path."""
+    """Patch enough that extract_handwritten takes the real Anthropic path.
+
+    The provider is pinned: OpenRouter is the default now, and these tests are
+    about the Anthropic transport specifically.
+    """
     import anthropic
-    return (
-        patch.object(vision.settings, "anthropic_api_key", "sk-test"),
-        patch.object(vision.settings, "offline_mode", False),
-        patch.object(anthropic, "Anthropic", return_value=client),
-    )
+
+    with ExitStack() as stack:
+        for ctx in (
+            patch.object(vision.settings, "vision_provider", "anthropic"),
+            patch.object(vision.settings, "anthropic_api_key", "sk-test"),
+            patch.object(vision.settings, "offline_mode", False),
+            patch.object(anthropic, "Anthropic", return_value=client),
+        ):
+            stack.enter_context(ctx)
+        yield client
 
 
 def _extract(client):
-    a, b, c = _live(client)
-    with a, b, c:
+    with _live(client):
         return vision.extract_handwritten(b"jpegbytes")
 
 
@@ -112,8 +122,8 @@ def test_a_transient_failure_is_raised_so_the_ticket_is_retried():
     class RateLimitError(Exception):
         pass
 
-    a, b, c = _live(_client(raises=RateLimitError("slow down")))
-    with a, b, c, pytest.raises(RateLimitError):
+    with _live(_client(raises=RateLimitError("slow down"))), \
+         pytest.raises(RateLimitError):
         vision.extract_handwritten(b"jpegbytes")
 
 
@@ -172,8 +182,7 @@ def test_the_status_email_counts_unread_tickets():
 # ---------------------------------------------------------------------------
 def test_check_connection_reports_the_exact_error():
     """The error text is the diagnosis — it must not be paraphrased away."""
-    a, b, c = _live(_client(raises=Exception("model: claude-nope not found")))
-    with a, b, c:
+    with _live(_client(raises=Exception("model: claude-nope not found"))):
         result = vision.check_connection()
     assert result["ok"] is False
     assert "claude-nope not found" in result["error"]
@@ -183,14 +192,12 @@ def test_check_connection_sends_the_same_parameters_as_a_real_extraction():
     """If it sent a different shape it could not catch a rejected parameter,
     which is the only reason it exists."""
     client = _client(text="ok")
-    a, b, c = _live(client)
-    with a, b, c:
+    with _live(client):
         vision.check_connection()
     probe = client.messages.create.call_args.kwargs
 
     real = _client(text='{"header": {}, "lines": [], "freight": null, "grand_total": null}')
-    d, e, f = _live(real)
-    with d, e, f:
+    with _live(real):
         vision.extract_handwritten(b"jpegbytes")
     live = real.messages.create.call_args.kwargs
 
@@ -199,8 +206,7 @@ def test_check_connection_sends_the_same_parameters_as_a_real_extraction():
 
 
 def test_check_connection_passes_when_the_api_answers():
-    a, b, c = _live(_client(text="ok"))
-    with a, b, c:
+    with _live(_client(text="ok")):
         result = vision.check_connection()
     assert result["ok"] is True and result["error"] is None
 
@@ -237,7 +243,8 @@ def test_a_failed_preflight_aborts_the_batch_and_touches_nothing():
     batch = db.create_batch()
     t = db.create_ticket({"batch_id": batch["id"], "source_filename": "MO-abort.jpg",
                           "status": "pending_review"})
-    with patch.object(run.settings, "anthropic_api_key", "sk-test"), \
+    with patch.object(run.settings, "vision_provider", "anthropic"), \
+         patch.object(run.settings, "anthropic_api_key", "sk-test"), \
          patch.object(run.settings, "offline_mode", False), \
          patch.object(run.vision, "check_connection",
                       return_value={"ok": False, "model": "m", "error": "BadRequestError: 400"}), \
@@ -276,7 +283,8 @@ def test_an_unreachable_reader_returns_503_with_a_readable_string_reason():
     t = db.create_ticket({"batch_id": batch["id"], "source_filename": "MO-503.jpg",
                           "status": "pending_review"})
 
-    with patch.object(run.settings, "anthropic_api_key", "sk-test"), \
+    with patch.object(run.settings, "vision_provider", "anthropic"), \
+         patch.object(run.settings, "anthropic_api_key", "sk-test"), \
          patch.object(run.settings, "offline_mode", False), \
          patch.object(run.vision, "check_connection", return_value={
              "ok": False, "model": "m",

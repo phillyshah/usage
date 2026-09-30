@@ -25,7 +25,8 @@ def test_system_prompt_sent_as_cache_control_block():
     fake_client = MagicMock()
     fake_client.messages.create.return_value = _fake_response()
 
-    with patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
+    with patch.object(vision.settings, "vision_provider", "anthropic"), \
+         patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
          patch.object(vision.settings, "offline_mode", False), \
          patch("anthropic.Anthropic", return_value=fake_client):
         vision.extract_handwritten(b"fake-jpeg-bytes")
@@ -43,7 +44,8 @@ def _request_kwargs() -> dict:
     fake_client = MagicMock()
     fake_client.messages.create.return_value = _fake_response()
 
-    with patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
+    with patch.object(vision.settings, "vision_provider", "anthropic"), \
+         patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
          patch.object(vision.settings, "offline_mode", False), \
          patch("anthropic.Anthropic", return_value=fake_client):
         vision.extract_handwritten(b"fake-jpeg-bytes")
@@ -90,10 +92,13 @@ def test_cache_stats_recorded_in_trace():
 
     fake_client = MagicMock()
     fake_client.messages.create.return_value = _fake_response(cache_read=1234, cache_write=0)
+    # The Anthropic transport specifically — OpenRouter is the default now and
+    # has no prompt cache to report.
 
     steps = tracer.start()
     try:
-        with patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
+        with patch.object(vision.settings, "vision_provider", "anthropic"), \
+             patch.object(vision.settings, "anthropic_api_key", "sk-test"), \
              patch.object(vision.settings, "offline_mode", False), \
              patch("anthropic.Anthropic", return_value=fake_client):
             vision.extract_handwritten(b"fake-jpeg-bytes")

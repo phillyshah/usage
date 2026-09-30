@@ -16,11 +16,23 @@ class Settings(BaseSettings):
     )
 
     # --- Which service reads the tickets ---
-    # "anthropic" | "openrouter". Defaults to anthropic so an existing
-    # deployment that sets nothing behaves exactly as it did. Switching is one
-    # variable and a restart, runtime-only — never a build arg, like every
-    # other credential here.
-    vision_provider: str = "anthropic"
+    # "anthropic" | "openrouter". OpenRouter is primary: the open-weight model
+    # reads these tickets well at roughly a tenth of the cost, and a spend cap
+    # on the other account is what stopped a day's work once already.
+    vision_provider: str = "openrouter"
+
+    # The stronger second reader, used ONLY on tickets the first one left with
+    # a genuine gap — see VISION_ESCALATE_FIELDS. Cost therefore scales with
+    # the failure rate rather than with volume: at ~10% of tickets this is
+    # cheaper than reading everything with Claude AND more accurate than
+    # reading everything with the open-weight model.
+    #
+    # Empty or "none" turns it off.
+    vision_escalate_model: str = "claude-opus-5-5"
+    # Which empty cells are worth paying to re-read. A blank Lot or Expiry is
+    # recoverable from the barcode and from the Expiry Log; these four are not
+    # recoverable from anywhere, and they are what the invoice is built from.
+    vision_escalate_fields: str = "unit_price,surgeon,hospital,surgery_date"
 
     # --- OpenRouter (open-weight models) ---
     openrouter_api_key: str = ""
