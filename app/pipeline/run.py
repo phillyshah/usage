@@ -15,8 +15,6 @@ full-looking spreadsheet with every handwritten field blank.
 from __future__ import annotations
 
 import logging
-import random
-import time
 from concurrent.futures import ThreadPoolExecutor
 
 from app.config import settings
@@ -152,16 +150,13 @@ def _safe_process(ticket: dict, attempts: int = 4) -> dict:
     Returns the ticket summary so run_batch can report how the batch actually
     went — in particular how many tickets came back with nothing read.
     """
-    for attempt in range(attempts):
-        try:
-            return process_ticket(ticket)
-        except Exception as e:  # pragma: no cover - network-timing dependent
-            if attempt < attempts - 1 and _is_transient(e):
-                time.sleep(0.5 * (2 ** attempt) + random.random() * 0.3)
-                continue
-            log.exception("failed to process ticket %s: %s", ticket.get("ticket_id"), e)
-            db.update_ticket(ticket["ticket_id"], {"flags": [f"Processing error: {e}"]})
-            return {"ticket_id": ticket.get("ticket_id"), "vision_error": str(e)}
+    try:
+        return transient.retry(process_ticket, ticket, attempts=attempts,
+                               label=str(ticket.get("ticket_id")))
+    except Exception as e:  # pragma: no cover - network-timing dependent
+        log.exception("failed to process ticket %s: %s", ticket.get("ticket_id"), e)
+        db.update_ticket(ticket["ticket_id"], {"flags": [f"Processing error: {e}"]})
+        return {"ticket_id": ticket.get("ticket_id"), "vision_error": str(e)}
 
 
 def run_batch(batch_id: str | None = None) -> dict:
