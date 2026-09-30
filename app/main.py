@@ -22,6 +22,7 @@ from app.config import settings
 from app.db import db
 from app.jobs import shutdown_scheduler, start_scheduler
 from app.metrics import auto_resolve_by_week
+from app.pipeline import transient
 from app.pipeline.run import ingest_image, process_ticket, run_batch
 from app.storage import OUTPUT_SHEETS, get_object, split_ref
 from app.supabase_key import WRONG_KEY_HELP, detect_key_role
@@ -202,6 +203,12 @@ async def upload_images(files: list[UploadFile] = File(...)):
         # fail the whole batch. A PDF expands to one ticket PER PAGE (multi-page
         # PDFs carry one surgery's ticket per page); an image is a single ticket.
         # Returns a list of per-ticket result dicts (flattened by the caller).
+        #
+        # Retried, because "isolate the failure" was doing the wrong thing with
+        # a momentary one: several uploads share one HTTP/2 storage client, and
+        # under contention it drops connections ("Server disconnected"). That is
+        # not a bad file — it is worth trying again, and it took four photos off
+        # a real upload before it was. Rising volume makes it more likely.
         from app.pipeline import pdf
 
         try:
@@ -213,11 +220,13 @@ async def upload_images(files: list[UploadFile] = File(...)):
                 out = []
                 for n, page_bytes in enumerate(pages, start=1):
                     page_name = f"{stem}-p{n}"
-                    r = ingest_image(page_bytes, page_name, batch["id"])
+                    r = transient.retry(ingest_image, page_bytes, page_name,
+                                        batch["id"], label=page_name)
                     out.append({"ticket_id": r["ticket_id"], "status": r["status"],
                                 "filename": page_name})
                 return out
-            r = ingest_image(data, filename, batch["id"])
+            r = transient.retry(ingest_image, data, filename, batch["id"],
+                                label=filename or "upload")
             return [{"ticket_id": r["ticket_id"], "status": r["status"], "filename": filename}]
         except Exception as exc:
             log.exception("ingest failed for %s", filename)

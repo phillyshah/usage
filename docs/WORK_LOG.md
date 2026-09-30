@@ -16,14 +16,14 @@ Last updated: 2026-09-30.
 
 | | |
 |---|---|
-| Version in `main` | **2.20.0** (PR #49); **2.21.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Version in `main` | **2.21.0** (PR #50); **2.22.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — `anthropic` (default) or `openrouter` from 2.21.0 |
 | Model | `claude-sonnet-5-5` from 2.20.0 — **but the VPS `.env` pins `ANTHROPIC_MODEL` and wins**, so the move needs an `.env` edit as well as a pull |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 416 passed, 2 skipped |
+| Tests | 432 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -517,6 +517,35 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.22.0 — Two things volume was going to break
+
+Both reported by Andy on the first good run through OpenRouter.
+
+**Uploads were dropping photos.** Four of a batch came back as "couldn't be
+uploaded — Server disconnected". That error is a transient HTTP/2 drop from the
+shared storage client under concurrent writes, and `transient.is_transient()`
+already classified it as retryable — but **only the batch path ever retried.**
+`ingest_image` had none, so the per-file isolation written to stop one bad file
+sinking a batch was instead discarding four good photos.
+
+The retry loop is now one shared `transient.retry()` used by both paths rather
+than a copy in each, which is what let them drift apart in the first place. The
+backoff matters as much as the retry: under contention, spreading out beats
+hammering through, and Andy's volume is rising every month.
+
+**Surgery dates from prior years.** A ticket read "Sept. 28, 2024" while its own
+patient sticker gave a DOS of 9/28/2026. These tickets are always from the
+current year, so the year is corrected — and the corrected value is **amber with
+a note naming the original reading**, because silently rewriting data the model
+extracted is how a tool stops being trusted.
+
+Deliberately not a blind "force the current year": a surgery on 28 December
+processed on 3 January is genuinely from the prior year, and stamping this year
+on it would push it eleven months into the future — turning a correct date into
+a wrong one. The current year is used only when it does not land the date
+implausibly ahead of today. That case has its own test, because it is the one
+that will actually happen and the one a naive implementation gets wrong.
 
 ### 2.21.0 — A second reader, because the first one hit a spend cap
 

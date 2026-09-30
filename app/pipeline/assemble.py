@@ -209,6 +209,23 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         header_vals[f] = val
         header_conf[f] = conf.at_least_amber(score, val)
 
+    # No ticket is from a prior year. A 2024 on a 2026 form is a slip of the
+    # pen or a misread digit — one real ticket read "Sept. 28, 2024" while its
+    # own patient sticker gave a DOS of 9/28/2026. Correcting it here means the
+    # Date, Month and Year columns and the reconciliation all see the fixed
+    # value, rather than three places each deciding what to believe.
+    #
+    # Amber, always: we changed a number the model read, so somebody confirms
+    # it. Silently rewriting extracted data is how a tool stops being trusted.
+    _fixed, _was = conf.correct_surgery_year(header_vals.get("surgery_date"))
+    if _was:
+        header_vals["surgery_date"] = _fixed
+        header_conf["surgery_date"] = "medium"
+        flags_early.append(
+            f"Surgery date read as {_fmt_date(_was)} — corrected to "
+            f"{_fmt_date(_fixed)}, because no ticket is from a prior year. "
+            f"Confirm it.")
+
     # Rep recovery from learned rep map (raises confidence when it agrees).
     rep_code = header_vals.get("rep_code")
     if rep_code:
@@ -778,6 +795,15 @@ def _apportion_grand_total(lines, line_conf, line_source, grand_total, freight,
     note += ". Verify"
     row["flags"].append(note)
     return True
+
+
+def _fmt_date(iso: str | None) -> str:
+    """ISO date as MM/DD/YYYY, which is how the workbook shows it."""
+    try:
+        y, m, d = str(iso)[:10].split("-")
+        return f"{m}/{d}/{y}"
+    except Exception:
+        return str(iso)
 
 
 def _clean_initials(value) -> str | None:

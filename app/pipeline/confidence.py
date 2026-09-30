@@ -21,7 +21,7 @@ only "there was genuinely nothing to propose". See at_least_amber.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from app.config import settings
 
@@ -110,6 +110,54 @@ def _parse_date(v) -> date | None:
         return date.fromisoformat(str(v)[:10])
     except Exception:
         return None
+
+
+# How far ahead of today a surgery date may sit before we stop believing the
+# current year. Small, but not zero: a ticket written the day before surgery, a
+# clock skew, or a date entered ahead of the operation all land slightly in the
+# future and are not mistakes.
+_FUTURE_SLACK = timedelta(days=30)
+
+
+def correct_surgery_year(value, today: date | None = None) -> tuple[str | None, str | None]:
+    """``(corrected, original)`` — the year fixed, and what it was.
+
+    These tickets are never from a prior year: the business runs on the current
+    one, and a 2024 on a 2026 ticket is a slip of the pen or a misread digit.
+    One real example, from the tickets this was built against: a form reading
+    "Sept. 28, 2024" whose own patient sticker gave a DOS of 9/28/2026.
+
+    NOT a blind "force the current year", because that breaks every January.
+    A surgery on 28 December processed on 3 January is genuinely from the prior
+    year, and stamping this year on it would move it eleven months into the
+    future — turning a correct date into a wrong one, which is worse than the
+    problem being fixed. So the current year is used unless it lands the date
+    implausibly ahead of today, in which case the previous year is right and is
+    kept.
+
+    ``original`` is None when nothing was changed, so the caller can tell the
+    difference between "already fine" and "rewritten" and say so.
+    """
+    today = today or date.today()
+    sd = _parse_date(value)
+    if sd is None:
+        return value, None
+
+    try:
+        candidate = sd.replace(year=today.year)
+    except ValueError:
+        # 29 February in a non-leap year. Guessing which way to nudge it is
+        # worse than leaving a date somebody can read for themselves.
+        return value, None
+    if candidate > today + _FUTURE_SLACK:
+        try:
+            candidate = sd.replace(year=today.year - 1)
+        except ValueError:
+            return value, None
+
+    if candidate == sd:
+        return value, None
+    return candidate.isoformat(), sd.isoformat()
 
 
 def validate_ticket(ticket: dict, lines: list[dict]) -> list[str]:

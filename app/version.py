@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.21.0"
+VERSION = "2.22.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.22.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Photos no longer get dropped when several are uploaded at once. "
+            "A momentary connection blip used to report them as 'couldn't be "
+            "uploaded' and lose them; the upload now waits a moment and tries "
+            "again, the way processing already did",
+            "Surgery dates are corrected to the current year. A ticket reading "
+            "2024 on a 2026 form is a slip of the pen, and it was flowing "
+            "through to the Date, Month and Year columns. The corrected date "
+            "is amber with a note saying what it was changed from, so nothing "
+            "is rewritten behind your back",
+            "A December surgery processed in January is left alone — it really "
+            "is from last year",
+        ],
+    },
     {
         "version": "2.21.0",
         "date": "2026-09-30",
