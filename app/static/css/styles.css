@@ -904,3 +904,17 @@ a { color: var(--teal-600); }
   margin: var(--s-4) 0; cursor: pointer;
 }
 .check-row input { width: 18px; height: 18px; flex: none; cursor: pointer; }
+
+/* ------------------------ Accuracy breakdown --------------------------- */
+.acc-table { width: 100%; border-collapse: collapse; margin-top: var(--s-4); }
+.acc-table th, .acc-table td {
+  text-align: right; padding: var(--s-2) var(--s-3);
+  border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums;
+}
+.acc-table th:first-child, .acc-table td:first-child { text-align: left; }
+.acc-table th { font-size: .85rem; color: var(--ink-500); font-weight: 600; }
+.acc-table .acc-field { font-weight: 600; }
+.acc-table .acc-silent { color: var(--red-600); font-weight: 700; }
+.acc-table .acc-zero { color: var(--ink-500); font-weight: 400; }
+.acc-eg { color: var(--ink-500); font-size: .85rem; text-align: left !important; }
+.acc-eg code { background: var(--bg); padding: 1px 4px; border-radius: 3px; }

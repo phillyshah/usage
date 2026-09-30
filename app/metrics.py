@@ -125,6 +125,100 @@ def corrections_by_day(days: int = 14) -> dict[str, dict]:
     return by_day
 
 
+# The fields diff_ticket compares, and therefore the only ones that can appear
+# in corrections_audit. Mirrored here so the report can assert it is not
+# reporting on anything it shouldn't: patient_initials is deliberately absent
+# from diff_ticket's lists (see docs/WORK_LOG.md), and a future addition there
+# must not silently start flowing into a report.
+AUDITED_FIELDS = (
+    "entity", "surgery_date", "rep", "rep_code", "surgeon", "hospital",
+    "po_number", "freight", "grand_total",
+    "ref", "description", "size", "lot", "qty", "expiry_date",
+    "unit_price", "line_total",
+)
+
+# How a correction is classified, from the confidence the tool claimed before a
+# human changed it. Straight from diff._audit_one:
+#     was_blank    = orig_conf == "low"     -> it declined to guess
+#     was_low_conf = orig_conf == "medium"  -> it guessed, and flagged it
+# which leaves "high" carrying neither flag: confident, and wrong.
+_SPLIT = {"low": "blank", "medium": "amber", "high": "silent"}
+
+_MAX_EXAMPLES = 3
+_EXAMPLE_CHARS = 40
+
+
+def _short(v) -> str:
+    v = "" if v is None else str(v).strip()
+    return v if len(v) <= _EXAMPLE_CHARS else v[:_EXAMPLE_CHARS - 1] + "…"
+
+
+def correction_accuracy(days: int = 90) -> dict:
+    """Which fields humans actually have to fix, and how badly.
+
+    The three splits mean different things and point at different fixes:
+
+      blank  — the tool read nothing and left the cell red. A coverage problem.
+      amber  — it guessed, flagged the guess, and was wrong. Calibration is
+               working; accuracy is not.
+      silent — it was CONFIDENT and wrong. No amber cell, nothing tells the
+               reviewer to look, and the value flows straight through. This is
+               the number worth acting on, and until now nothing computed it.
+
+    ``corrections_by_day`` above counts the same rows per day; this groups them
+    by field so the next accuracy investment can be aimed rather than guessed.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    by_field: dict[str, dict] = {}
+    by_confidence = {"high": 0, "medium": 0, "low": 0}
+    total = 0
+
+    for r in db.backend.select("corrections_audit"):
+        dt = _parse_dt(r.get("corrected_at"))
+        if not dt or dt < cutoff:
+            continue
+        field = (r.get("field_name") or "").strip()
+        if not field:
+            continue
+        conf = (r.get("orig_confidence") or "low").lower()
+        if conf not in _SPLIT:
+            conf = "low"
+        split = _SPLIT[conf]
+
+        total += 1
+        by_confidence[conf] += 1
+        row = by_field.setdefault(field, {
+            "field": field, "total": 0, "blank": 0, "amber": 0, "silent": 0,
+            "examples": [],
+        })
+        row["total"] += 1
+        row[split] += 1
+        # A few before/after pairs turn "unit_price is worst" into "unit_price
+        # is worst BECAUSE the dollar sign reads as an 8". Prefer the silent
+        # ones: those are the cases nobody was warned about.
+        if len(row["examples"]) < _MAX_EXAMPLES or split == "silent":
+            ex = {"was": _short(r.get("orig_value")),
+                  "now": _short(r.get("corrected_value")),
+                  "flagged": split != "silent"}
+            if split == "silent":
+                row["examples"].insert(0, ex)
+            else:
+                row["examples"].append(ex)
+            del row["examples"][_MAX_EXAMPLES:]
+
+    silent = by_confidence["high"]
+    return {
+        "days": days,
+        "total": total,
+        "silent": silent,
+        "silent_rate": round(silent / total, 4) if total else 0.0,
+        "by_confidence": by_confidence,
+        # Worst first — the point of the report is where to spend next.
+        "by_field": sorted(by_field.values(),
+                           key=lambda f: (-f["total"], f["field"])),
+    }
+
+
 # (table, timestamp column, output key) for the learning stores.
 _LEARNING_TABLES = [
     ("learning_price", "last_seen", "prices"),

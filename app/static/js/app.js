@@ -456,6 +456,7 @@ $("#corrections-form").addEventListener("submit", async (e) => {
     correctionsPicker.clear();
     loadMetrics();
     loadLearning();
+    loadAccuracy();
     loadUploads();
   } catch (err) {
     renderNotice(correctionsResult, "error", "We couldn't read your corrections",
@@ -875,6 +876,87 @@ async function loadReferenceStatus() {
   } catch {
     // Leave whatever is shown; tiles stay usable even if status fails.
   }
+}
+
+/* ===================================================================== *
+ *  What you keep having to fix — per-field correction breakdown
+ * ===================================================================== */
+const accuracyHeadline = $("#accuracy-headline");
+const accuracyTable = $("#accuracy-table");
+
+/* Field names as the accountant would say them, not as the database spells. */
+const FIELD_LABELS = {
+  unit_price: "Price", line_total: "Line total", grand_total: "Grand total",
+  ref: "Ref number", lot: "Lot number", expiry_date: "Expiry date",
+  qty: "Quantity", description: "Description", size: "Size",
+  surgery_date: "Surgery date", rep_code: "Rep code", rep: "Sales rep",
+  surgeon: "Surgeon", hospital: "Hospital", entity: "Entity",
+  po_number: "PO number", freight: "Freight",
+};
+const fieldLabel = (f) => FIELD_LABELS[f] || f;
+
+async function loadAccuracy() {
+  let d;
+  try {
+    d = await api.accuracyMetrics(90);
+  } catch {
+    return;                       // panel simply stays empty
+  }
+  if (!d || !d.total) {
+    accuracyHeadline.replaceChildren(el("div", { class: "empty-state" }, [
+      el("strong", { text: "Nothing to show yet" }),
+      el("span", { text: "Once you send corrections back in step 4, this will " +
+                         "show which fields they were for." }),
+    ]));
+    accuracyTable.replaceChildren();
+    return;
+  }
+
+  const pct = Math.round((d.silent_rate || 0) * 100);
+  accuracyHeadline.replaceChildren(el("div", { class: "stat-grid" }, [
+    stat(d.total, `corrections in ${d.days} days`),
+    stat(d.silent, "were wrong without warning"),
+    stat(`${pct}%`, "of corrections had no flag"),
+  ]));
+
+  const head = el("tr", {}, [
+    el("th", { text: "Field" }),
+    el("th", { text: "Corrections" }),
+    el("th", { text: "Was blank" }),
+    el("th", { text: "Was flagged amber" }),
+    el("th", { text: "Wrong without warning" }),
+  ]);
+  const body = [];
+  for (const f of d.by_field || []) {
+    body.push(el("tr", {}, [
+      el("td", { class: "acc-field", text: fieldLabel(f.field) }),
+      el("td", { text: String(f.total) }),
+      el("td", { text: String(f.blank) }),
+      el("td", { text: String(f.amber) }),
+      el("td", { class: f.silent ? "acc-silent" : "acc-zero",
+                 text: String(f.silent) }),
+    ]));
+    // One before/after per field, so a number becomes a diagnosis.
+    const eg = (f.examples || [])[0];
+    if (eg && (eg.was || eg.now)) {
+      body.push(el("tr", {}, [
+        el("td", { class: "acc-eg", attrs: { colspan: "5" }, html:
+          `e.g. read <code>${escapeHtml(eg.was) || "(blank)"}</code> → ` +
+          `corrected to <code>${escapeHtml(eg.now)}</code>` +
+          (eg.flagged ? "" : " — and it was not flagged") }),
+      ]));
+    }
+  }
+  accuracyTable.replaceChildren(
+    el("table", { class: "acc-table" }, [
+      el("thead", {}, [head]), el("tbody", {}, body),
+    ]));
+}
+
+function escapeHtml(v) {
+  return String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
 }
 
 /* ===================================================================== *
@@ -1792,6 +1874,7 @@ debugForm.addEventListener("submit", async (e) => {
 checkHealth();
 loadBatches();
 loadMetrics();
+loadAccuracy();
 loadLearning();
 loadUploads();
 loadReferenceStatus();

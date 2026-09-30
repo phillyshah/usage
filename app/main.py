@@ -709,6 +709,18 @@ def metrics_auto_resolve_daily(days: int = 14):
     return auto_resolve_by_day(days)
 
 
+@app.get("/metrics/accuracy")
+def metrics_accuracy(days: int = 90):
+    """Which fields humans actually have to fix, worst first.
+
+    90 days rather than the 14 the daily charts use: corrections are far
+    sparser than batches, and a fortnight of them says nothing.
+    """
+    from app.metrics import correction_accuracy
+
+    return correction_accuracy(days)
+
+
 @app.get("/metrics/learning")
 def metrics_learning(days: int = 400):
     """Learning impact: cumulative totals + per-day corrections/facts learned."""

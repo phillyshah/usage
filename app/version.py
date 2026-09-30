@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.17.0"
+VERSION = "2.18.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.18.0",
+        "date": "2026-09-30",
+        "notes": [
+            "New 'What you keep having to fix' panel in History. Every "
+            "correction you've sent back, grouped by which field it was, worst "
+            "first — so you can see where the tool is actually costing you "
+            "review time instead of guessing",
+            "It separates three very different things: cells the tool left "
+            "blank, guesses it flagged amber and got wrong, and — the one "
+            "worth watching — cells it was confident about and still got "
+            "wrong. Those last ones aren't coloured, so nobody is ever asked "
+            "to check them",
+            "The data has been recorded since the learning loop shipped; this "
+            "is the first time anything has read it",
+        ],
+    },
     {
         "version": "2.17.0",
         "date": "2026-09-29",
