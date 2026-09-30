@@ -6,10 +6,18 @@ Confidence is EARNED BY VALIDATION, not self-rating (PROJECT_OVERVIEW principle 
   MEDIUM-> single-source vision read above threshold but unverified; OR sources
            mostly agree with a minor discrepancy; OR REF resolved only via an
            un-cross-checked vision read.
-  LOW   -> no read / below threshold / sources materially conflict.
+  LOW   -> nothing to offer: no read at all, and no fallback produced a
+           candidate.
 
 Maps to the three cell colours in sheets/write.py: high=no fill, medium=amber,
 low=red/blank.
+
+MEDIUM now also covers a read the model was unsure about, and a value supplied
+by a fallback (a learned price, a hospital from the surgeon record, a number the
+ticket's own total determines). Those used to be scored LOW and therefore
+DELETED — the reviewer was shown an empty red cell and asked to type in a value
+the tool was holding. Amber says "here is a candidate, confirm it"; red now means
+only "there was genuinely nothing to propose". See at_least_amber.
 """
 from __future__ import annotations
 
@@ -23,6 +31,20 @@ _RANK = {"low": 0, "medium": 1, "high": 2}
 def meets_threshold(conf: str) -> bool:
     """Is a model confidence at/above VISION_CONF_THRESHOLD?"""
     return _RANK.get((conf or "low").lower(), 0) >= _RANK.get(settings.vision_conf_threshold, 1)
+
+
+def at_least_amber(score: str, value) -> str:
+    """A value we actually have is never thrown away: present -> at least amber.
+
+    Deliberately applied at the call sites rather than inside score_field.
+    score_field answers "what does the evidence support", and its "low" for two
+    conflicting sources is a true and useful answer. This answers the different
+    question of what to SHOW, and the two should not be confused — each call
+    site also attaches the note that explains why the cell is amber.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "low"
+    return "medium" if (score or "low").lower() == "low" else score
 
 
 def score_field(sources: dict) -> str:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
@@ -489,6 +490,41 @@ class Database:
                 return r
         return matches[0]
 
+    def hospital_for_dist_code(self, dist_code: str) -> str | None:
+        """The one hospital this DistCode has ever been seen at, or None.
+
+        The surgeon chain needs BOTH a surgeon name and a DistCode to build its
+        key, so a ticket whose surgeon went unread loses its hospital too —
+        even when the DistCode is perfectly legible and has appeared on dozens
+        of prior tickets for a single account. This is the fallback for that
+        case, and it offers nothing at all unless the answer is unambiguous.
+
+        Spellings are normalised before the distinctness test, so variants of
+        one account collapse into one answer while two genuinely different
+        accounts still count as two and return None.
+        """
+        if not dist_code:
+            return None
+        from app.pricing import normalize as nz
+
+        code = re.sub(r"[^A-Za-z0-9]", "", str(dist_code)).upper()
+        if not code:
+            return None
+        rows = (self.backend.find_all("reference_surgeons", "dist_code", dist_code)
+                + self.backend.find_all("learning_surgeon_map", "dist_code", dist_code))
+        groups: dict[str, list[str]] = {}
+        for r in rows:
+            raw = (r.get("hospital") or "").strip()
+            if not raw:
+                continue
+            if re.sub(r"[^A-Za-z0-9]", "", str(r.get("dist_code") or "")).upper() != code:
+                continue
+            groups.setdefault(nz.normalize_hospital(raw), []).append(raw)
+        if len(groups) != 1:
+            return None
+        spellings = next(iter(groups.values()))
+        return max(set(spellings), key=spellings.count)
+
     # ---- part_resolved view: learned override, else log ----
     def resolve_part_desc(self, ref: str) -> dict | None:
         if not ref:
@@ -603,13 +639,28 @@ class Database:
             },
         )
 
+    def learning_prices_for_part(self, part_no: str) -> list[dict]:
+        """Every learned price for this REF, at any hospital.
+
+        The matching policy lives in app/pricing/suggest.py, not here: this used
+        to compare hospital names with ``==``, which missed 'Blake Hospital'
+        against the learned 'Blake Hospital (HCA)' while step 5 matched the same
+        pair through four tiers. Two policies for one concept is one too many.
+        """
+        if not part_no:
+            return []
+        return self.backend.find_all("learning_price", "part_no", part_no)
+
     def price_suggestion(self, part_no: str, hospital: str) -> float | None:
-        if not (part_no and hospital):
-            return None
-        for r in self.backend.find_all("learning_price", "part_no", part_no):
-            if r.get("hospital") == hospital:
-                return float(r["unit_price"])
-        return None
+        """The price extraction will offer for (part, hospital), or None.
+
+        Thin wrapper so a caller asking the simple question gets the same answer
+        the pipeline uses.
+        """
+        from app.pricing.suggest import suggest_price
+
+        s = suggest_price(self.learning_prices_for_part(part_no), hospital)
+        return s.value if s else None
 
     def rep_for_code(self, rep_code: str) -> str | None:
         r = self.backend.find_one("learning_rep_map", "rep_code", rep_code)

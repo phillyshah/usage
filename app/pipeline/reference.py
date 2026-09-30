@@ -21,7 +21,8 @@ from app.db import db
 from app.learning.ingest_reference import surgeon_key
 
 
-def resolve_part(ref: str | None, gtin: str | None, lot: str | None) -> dict:
+def resolve_part(ref: str | None, gtin: str | None, lot: str | None,
+                 ref_from_barcode: bool = False) -> dict:
     """Resolve a device line to its Ref Number and reference attributes.
 
     `ref` is any printed/vision/(240)-read REF; `gtin` is the decoded (01);
@@ -65,7 +66,14 @@ def resolve_part(ref: str | None, gtin: str | None, lot: str | None) -> dict:
         if ref:  # cross-check the read REF against the authoritative SKU
             result["ref_crosscheck_ok"] = (str(ref).strip() == str(sku).strip())
     elif ref:
-        result["ref"], result["ref_source"] = ref, "printed"
+        # Where the REF came from decides what it is worth. A (240) application
+        # identifier lifted out of the DataMatrix is decoded, not read — the same
+        # class of evidence as the lot number beside it. Scoring it as "printed"
+        # sent GS1-certain part numbers to the workbook as empty red cells
+        # whenever the part master hadn't caught up with them, which for hip
+        # components and disposables is most of the time.
+        result["ref"] = ref
+        result["ref_source"] = "barcode_240" if ref_from_barcode else "printed"
     elif lot:
         lot_row = db.lot_lookup(lot)
         if lot_row and lot_row.get("part_no"):

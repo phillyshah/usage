@@ -376,7 +376,11 @@ runBtn.addEventListener("click", async () => {
     if (data && data.batch_id) rememberBatch(data.batch_id);
     renderRunResult(data);
     setDownloadReady(data && data.batch_id);
-    toast("success", "Data extracted", "Your review spreadsheet is ready in step 3.");
+    if (data && data.vision_failures > 0) {
+      toast("error", "Some tickets couldn't be read", "Check the message above before you use the spreadsheet.");
+    } else {
+      toast("success", "Data extracted", "Your review spreadsheet is ready in step 3.");
+    }
     loadBatches(); // refresh the history list
   } catch (err) {
     runProgress.hidden = true;
@@ -391,6 +395,18 @@ runBtn.addEventListener("click", async () => {
 
 function renderRunResult(data) {
   const count = data && typeof data.ticket_count === "number" ? data.ticket_count : null;
+  // A batch where the reader never ran still writes a spreadsheet — barcodes
+  // decode locally — so it looks finished. It isn't: every handwritten field
+  // on those tickets is missing, and saying "ready" about that is how a whole
+  // batch of empty tickets once got sent to the accountant.
+  const failed = data && typeof data.vision_failures === "number" ? data.vision_failures : 0;
+  if (failed > 0) {
+    renderNotice(runResult, "error",
+      `${pluralize(failed, "ticket")} couldn't be read`,
+      [el("p", { class: "notice-text",
+        text: `The spreadsheet is there, but on ${failed === 1 ? "that ticket" : "those tickets"} nothing handwritten came back — no surgeon, hospital, date, prices or totals, only the barcode data. They're marked "EXTRACTION FAILED" in the Notes column. Run the batch again; if it keeps happening, tell your team lead.` })]);
+    return;
+  }
   const body = [el("p", { class: "notice-text",
     text: count != null
       ? `Done. ${pluralize(count, "ticket")} processed. Head to step 3 to download and review.`

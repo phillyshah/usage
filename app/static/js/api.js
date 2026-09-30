@@ -90,7 +90,7 @@ export const api = {
 
   /**
    * POST /batches/run (json optional {batch_id})
-   * -> 200 {batch_id, sheet_path, ticket_count}
+   * -> 200 {batch_id, sheet_path, ticket_count, vision_failures}
    * This can take a while; caller should show indeterminate progress.
    */
   runBatch(batchId) {

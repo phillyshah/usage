@@ -5,9 +5,40 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.18.0"
+VERSION = "2.19.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.19.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Fixed the reason a batch came back with more than half the "
+            "spreadsheet red. The AI reader was returning nothing at all — on "
+            "every ticket — and the app reported success anyway, because the "
+            "barcodes still decoded and the sheet still looked full",
+            "A ticket the reader couldn't read is now marked EXTRACTION "
+            "FAILED in the Notes column, the run tells you how many there "
+            "were instead of saying your spreadsheet is ready, and the 5pm "
+            "email says so too. A failure that can hide is a failure that "
+            "will happen again unnoticed",
+            "Red now means one thing: there was nothing to suggest. If the "
+            "tool has a value — a read it wasn't sure of, a price it learned "
+            "from your corrections, the hospital written on the ticket, or a "
+            "number your grand total works out exactly — you get it in amber "
+            "with a note saying where it came from. Confirming beats retyping",
+            "The Hospital column now shows the hospital written on the "
+            "ticket. It used to come only from the surgeon lookup, so a "
+            "ticket that plainly said ENLOE came back blank and red",
+            "When every line but one has a price, the missing one is worked "
+            "out from the grand total and offered in amber. Two or more "
+            "blanks aren't guessed at — you're told how much is unaccounted "
+            "for and roughly how it splits",
+            "The patient mask is gone. It was clipping the Surgery Date and "
+            "Surgeon off the top of tickets it wasn't framed for, and when it "
+            "couldn't place itself it quietly dropped the whole ticket from "
+            "the spreadsheet",
+        ],
+    },
     {
         "version": "2.18.0",
         "date": "2026-09-30",

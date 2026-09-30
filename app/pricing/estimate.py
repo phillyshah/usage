@@ -24,9 +24,24 @@ MIN_CROSS_HOSPITAL_OBSERVATIONS = 3
 MAX_CROSS_HOSPITAL_SPREAD = 3.0
 
 
-def _usable_spread(values: list[float]) -> bool:
+def usable_spread(values: list[float]) -> bool:
+    """Do these observations agree closely enough to be evidence of one price?"""
     lo, hi = min(values), max(values)
     return lo > 0 and hi / lo <= MAX_CROSS_HOSPITAL_SPREAD
+
+
+def cross_hospital_typical(values: list[float]) -> float | None:
+    """The typical price across hospitals, or None if the witnesses don't agree.
+
+    Public so extraction-time suggestions and the step-5 estimate ladder apply
+    one set of guardrails instead of two that can drift apart.
+    """
+    if len(values) < MIN_CROSS_HOSPITAL_OBSERVATIONS or not usable_spread(values):
+        return None
+    return typical(values)
+
+
+_usable_spread = usable_spread   # internal callers below
 
 
 @dataclass

@@ -17,14 +17,21 @@ re-litigating, and open threads.
 - Container name: `usage-labels-api-1`, image: `usage-labels-api:latest`
 
 ## Critical standing rules
-- **Never commit real ticket photos** — .gitignore blocks *.jpeg, MH*.jpg, MO*.jpg, tests/fixtures/real/
-- **PHI gate:** patient region masked before any storage; failure routes to manual queue
-- **One deliberate exception:** `EXTRACT_PATIENT_INITIALS` (currently **on** in prod)
-  reads the patient's two initials from the pre-mask image at ingest —
-  `app/pipeline/patient.py` only. It sends just the sticker crop, keeps only two
-  letters, and the stored image is still fully redacted. Keep it that narrow; see
-  `docs/WORK_LOG.md` before changing anything in that path.
-- **Anthropic account must run under a HIPAA BAA**
+- **Never commit real ticket photos or scans** — .gitignore blocks *.jpeg, *.pdf,
+  MH*.jpg, MO*.jpg, tests/fixtures/real/. This is now the *only* place the
+  "don't let PHI escape" rule is enforced by code, so don't weaken it.
+- **There is no patient mask.** Removed in 2.19.0 by Andy's decision: storage is
+  HIPAA-compliant, and the mask was costing accuracy it wasn't buying back — it
+  clipped Surgery Date and Surgeon out of the header on differently-framed
+  photos, and its `located=False` path silently produced tickets with zero rows.
+  The ticket image is sent and stored whole, patient sticker included.
+- **The Anthropic BAA is load-bearing.** It always mattered; it now covers the
+  main extraction call, which sends the full ticket image rather than a crop.
+- **`EXTRACT_PATIENT_INITIALS`** (currently **on** in prod) decides whether the
+  patient's two initials are **kept**, not whether they are read — the model
+  sees the sticker either way. Off means `assemble.py` discards them and nothing
+  about the patient reaches the database or the workbook. `_clean_initials`
+  rejects anything that isn't exactly two letters rather than truncating it.
 - **Learning tables** (`learning_price`, `learning_part_desc`, `learning_rep_map`, `learning_gtin_xref`, `learning_surgeon_map`, `corrections_audit`, `corrected_uploads`) — flag explicitly before any work that could risk these
 
 ## Branch

@@ -51,10 +51,20 @@ class DayStatus:
     tickets_verified: int
     price_runs: int
     consecutive_misses: int       # weekdays in a row with no uploads, incl. today
+    # Last, with a default, so the positional constructions in the tests and any
+    # older caller keep meaning what they did.
+    tickets_unread: int = 0       # processed, but the reader returned nothing
 
     @property
     def ran(self) -> bool:
         return self.tickets_uploaded > 0
+
+    @property
+    def has_unread(self) -> bool:
+        """Tickets that produced a spreadsheet row with nothing handwritten in
+        it. A silent extraction outage looks exactly like a normal day in every
+        other count on this card, which is why it gets its own."""
+        return self.tickets_unread > 0
 
     @property
     def has_unprocessed(self) -> bool:
@@ -136,6 +146,9 @@ def collect_status(today=None) -> DayStatus:
         batches_generated=batches,
         tickets_pending=sum(1 for t in todays if t.get("status") == "pending_review"),
         tickets_verified=sum(1 for t in todays if t.get("status") == "verified"),
+        tickets_unread=sum(1 for t in todays
+                           if any("EXTRACTION FAILED" in str(f)
+                                  for f in (t.get("flags") or []))),
         price_runs=price_runs,
         consecutive_misses=misses,
     )
@@ -186,6 +199,14 @@ def render(status: DayStatus, app_url: str = "https://usage.90ten.life") -> tupl
         if status.consecutive_misses > 1:
             lead += (f" This is the {_ordinal(status.consecutive_misses)} weekday "
                      "in a row with nothing uploaded.")
+    elif status.has_unread:
+        subject = (f"Usage {pretty}: {status.tickets_unread} of "
+                   f"{status.tickets_uploaded} tickets COULD NOT BE READ")
+        lead = (f"{status.tickets_unread} ticket"
+                f"{'' if status.tickets_unread == 1 else 's'} produced a "
+                "spreadsheet row with nothing handwritten in it — no surgeon, "
+                "hospital, date, prices or totals. Re-run the batch before "
+                "anyone reviews it.")
     elif status.has_unprocessed:
         subject = (f"Usage {pretty}: {status.tickets_uploaded} tickets uploaded, "
                    "none processed")
@@ -202,6 +223,7 @@ def render(status: DayStatus, app_url: str = "https://usage.90ten.life") -> tupl
         ("Spreadsheets generated", status.batches_generated),
         ("Awaiting review", status.tickets_pending),
         ("Verified", status.tickets_verified),
+        ("Could not be read", status.tickets_unread),
         ("Price enrichment runs", status.price_runs),
     ]
     text = "\n".join([

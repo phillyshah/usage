@@ -1,8 +1,8 @@
 """Template detection + region geometry.
 
-Two ticket layouts circulate: Maxx Orthopedics and Maxx Health. We need to know
-which one we're looking at so redaction can mask the right patient-sticker
-location and segmentation can find the label grid.
+Two ticket layouts circulate: Maxx Orthopedics and Maxx Health, mirror images of
+each other. We need to know which one we're looking at so segmentation can find
+the label grid.
 
 Detection here is intentionally conservative and deterministic. A production
 build would key off printed logo/anchor matching; until those reference anchors
@@ -43,13 +43,10 @@ class Rect:
 @dataclass(frozen=True)
 class TemplateGeometry:
     name: str
-    # Patient sticker region to redact (PHI). Conservative/oversized on purpose.
-    #
-    # NOTE: this is the *anchor*, not the mask. redact.py masks the whole band
-    # from this rectangle's left edge to the image edge, from the top of the
-    # image down to the top of grid_region — see patient_mask(). A fixed
-    # rectangle cannot survive a differently-framed photo, and one that came up
-    # short left a patient's date of birth visible in a stored image.
+    # Where the patient sticker sits on this layout. Nothing masks it any more;
+    # it is kept because it is the one thing that distinguishes the two
+    # templates from each other, and the mirrored header_region is derived from
+    # which side it falls on.
     patient_region: Rect
     # Header block (handwritten fields + entity) for the vision call context.
     header_region: Rect
@@ -80,33 +77,6 @@ def geometry_for(template: str) -> TemplateGeometry | None:
     return _GEOMETRY.get(template)
 
 
-def patient_mask(template: str) -> Rect | None:
-    """The region redact.py actually blacks out.
-
-    Everything on the patient's side of the sheet, above the label grid. On both
-    layouts that band holds exactly two things: the patient sticker, and Maxx's
-    own printed contact boilerplate (phone, fax, "Email PO's to ..."). Nothing
-    the extraction reads — rep, rep code, hospital, surgery date and surgeon all
-    sit in header_region on the opposite side, and the labels all sit below in
-    grid_region.
-
-    So the whole band can go, which is what makes this framing-independent: the
-    sticker is covered wherever it lands in that zone, instead of only when the
-    photo happens to be cropped the way the fixed rectangle assumed.
-    """
-    geom = _GEOMETRY.get(template)
-    if geom is None:
-        return None
-    p, grid = geom.patient_region, geom.grid_region
-    # Health's sticker is on the left, Orthopedics' on the right: extend away
-    # from the header, to whichever image edge the sticker side faces.
-    if p.x < 0.5:
-        x0, x1 = 0.0, p.x + p.w
-    else:
-        x0, x1 = p.x, 1.0
-    return Rect(x0, 0.0, x1 - x0, grid.y)
-
-
 def detect_template(img, filename: str | None = None) -> str:
     """Best-effort template detection.
 
@@ -114,12 +84,7 @@ def detect_template(img, filename: str | None = None) -> str:
       1. Entity prefix on the filename (the production naming convention).
       2. Entity word anywhere in the filename (descriptively named files).
       3. (future) printed-logo anchor match via OpenCV template matching.
-    Returns one of MAXX_ORTHO / MAXX_HEALTH / UNKNOWN. UNKNOWN must NOT be
-    treated as redactable — callers route it to the manual queue.
-
-    Getting this wrong is a PHI problem, not just an accuracy one: the two
-    layouts are mirror images, so a Health ticket read as Orthopedics masks the
-    empty right-hand side and leaves the patient sticker in full view.
+    Returns one of MAXX_ORTHO / MAXX_HEALTH / UNKNOWN.
     """
     name = os.path.basename(filename or "").lower()
 

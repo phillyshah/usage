@@ -15,6 +15,7 @@ from app.db import db, new_id
 from app.pipeline import confidence as conf
 from app.pipeline.align import align_vision_lines
 from app.pipeline.reference import resolve_part, resolve_surgeon
+from app.pricing.suggest import suggest_price
 
 # Field-name constants (kept in sync with sheets/write.py).
 TICKET_FIELDS = [
@@ -23,9 +24,9 @@ TICKET_FIELDS = [
     "rep",
     "rep_code",
     "surgeon",
-    # Read at ingest from the pre-mask image (app/pipeline/patient.py), not from
-    # the redacted photo this module sees. Carried through so it gets a
-    # confidence row and lands in the workbook's Inits column.
+    # Two letters off the patient sticker, and only when
+    # EXTRACT_PATIENT_INITIALS is on. Nothing else about the patient is read,
+    # returned or stored.
     "patient_initials",
     "hospital",
     "po_number",
@@ -189,15 +190,24 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     # ---- ticket header fields ----
     header_vals: dict = {}
     header_conf: dict = {}
+    # Fields the model read but was not sure about. Named in the ticket notes so
+    # an amber cell always says why it is amber.
+    weak_reads: list[str] = []
+    # Notes raised before validate_ticket builds the ticket's flag list.
+    flags_early: list[str] = []
     for f in ["entity", "rep", "rep_code", "surgeon", "hospital", "surgery_date", "po_number"]:
         vf = vheader.get(f)
         val = _v(vf)
         score = conf.score_field({"vision": val, "vision_conf": _c(vf)})
-        # Drop sub-threshold vision reads (write nothing, colour red).
+        # A sub-threshold read used to be DELETED here — the reviewer got an
+        # empty red cell and was asked to find a value the tool was holding all
+        # along. Keep it, show it amber, and say the model was unsure. Deciding
+        # is cheaper than looking up.
         if val is not None and not conf.meets_threshold(_c(vf)) and score != "high":
-            val, score = None, "low"
+            score = "medium"
+            weak_reads.append(f)
         header_vals[f] = val
-        header_conf[f] = score
+        header_conf[f] = conf.at_least_amber(score, val)
 
     # Rep recovery from learned rep map (raises confidence when it agrees).
     rep_code = header_vals.get("rep_code")
@@ -220,26 +230,62 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     freight = _money(_v(vision.get("freight")))
     grand_total = _money(_v(vision.get("grand_total")))
     header_vals["freight"] = freight
-    header_conf["freight"] = conf.score_field(
-        {"vision": freight, "vision_conf": _c(vision.get("freight"))}
-    )
+    header_conf["freight"] = conf.at_least_amber(conf.score_field(
+        {"vision": freight, "vision_conf": _c(vision.get("freight"))}), freight)
     header_vals["grand_total"] = grand_total
-    header_conf["grand_total"] = conf.score_field(
-        {"vision": grand_total, "vision_conf": _c(vision.get("grand_total"))}
-    )
+    header_conf["grand_total"] = conf.at_least_amber(conf.score_field(
+        {"vision": grand_total, "vision_conf": _c(vision.get("grand_total"))}),
+        grand_total)
 
-    # Canonical hospital for the price memory: prefer the handwritten hospital,
-    # else resolve it from the surgeon+DistCode chain (master, then learned).
-    # Used only to key learned prices — the header output is unchanged.
+    # ---- hospital: resolved once, here, and actually published ----
+    #
+    # This used to compute the surgeon-chain fallback, use it as a price key and
+    # then throw it away ("the header output is unchanged"), while the workbook
+    # separately re-ran the same lookup and reddened the Hospital column whenever
+    # the surgeon chain missed — on tickets that plainly read ENLOE, SCHNEIDER
+    # HOSPITAL, PARAGON SURGICAL CENTER. Resolving once and publishing the result
+    # also stops the Usage and Tickets sheets disagreeing about the same field.
+    #
+    # The handwritten value outranks the master: it is what the surgeon wrote on
+    # THIS ticket, where the master is what was true when it was last exported.
+    from app.pricing import normalize as nz
+
+    _surg = resolve_surgeon(header_vals.get("surgeon"), header_vals.get("rep_code"))
+    _chain = _surg.get("hospital") if _surg.get("matched") else None
     hospital = header_vals.get("hospital")
-    if not hospital:
-        _surg = resolve_surgeon(header_vals.get("surgeon"), header_vals.get("rep_code"))
-        if _surg.get("matched"):
-            hospital = _surg.get("hospital")
+    if hospital and _chain:
+        if nz.normalize_hospital(hospital) == nz.normalize_hospital(_chain):
+            header_conf["hospital"] = "high"      # two independent sources agree
+        else:
+            header_conf["hospital"] = "medium"
+            flags_early.append(
+                f"Hospital read as '{hospital}' but the surgeon record says "
+                f"'{_chain}' — check which is right")
+    elif hospital:
+        header_conf["hospital"] = conf.at_least_amber(
+            header_conf.get("hospital", "low"), hospital)
+    elif _chain:
+        hospital = _chain
+        header_vals["hospital"] = _chain
+        header_conf["hospital"] = "medium" if _surg.get("source") == "learned" else "high"
+        flags_early.append(
+            f"Hospital taken from the surgeon record for "
+            f"{header_vals.get('surgeon') or 'this surgeon'} — not written on the ticket")
+    else:
+        # Neither. The DistCode alone may still be unambiguous.
+        _by_code = db.hospital_for_dist_code(header_vals.get("rep_code"))
+        if _by_code:
+            hospital = _by_code
+            header_vals["hospital"] = _by_code
+            header_conf["hospital"] = "medium"
+            flags_early.append(
+                f"Hospital inferred from DistCode {header_vals.get('rep_code')}, "
+                f"which has only ever been {_by_code} — verify")
 
     # ---- line items: merge each barcode label with its aligned vision line ----
     lines: list[dict] = []
     line_conf: list[dict] = []
+    line_source: list[dict] = []
     raw_blobs: list[dict] = []  # exactly what each source produced, pre-resolution
     for i, label in enumerate(labels):
         vline = vlines[i] if i < len(vlines) else {}
@@ -271,7 +317,8 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         # Did the barcode actually establish identity, or is this OCR-only?
         from_barcode = bool(label.get("ref") or label.get("lot") or label.get("gtin"))
 
-        part = resolve_part(ref_in, label.get("gtin"), lot_in)
+        part = resolve_part(ref_in, label.get("gtin"), lot_in,
+                            ref_from_barcode=bool(label.get("ref")))
         wasted = _is_wasted(vline)
 
         # A handwritten line carries its own description, and usually a part
@@ -291,30 +338,45 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         qty = _qty(qty_read)
         unit_price = _money(_v(vline.get("unit_price")))
 
-        # Hospital price memory: fills a blank price for the SAME hospital
-        # (amber + note, so it's always reviewed); never overrides a read price
-        # — a read price that disagrees is flagged for an eyeball instead.
+        # Price memory. Fills a blank price (amber + a note saying where the
+        # number came from, so it is always reviewed) and never overrides a
+        # read price — a read price that disagrees is flagged for an eyeball
+        # instead.
         price_conf = conf.score_field(
             {"vision": unit_price, "vision_conf": _c(vline.get("unit_price"))}
         )
         price_note = None
-        _suggested_price = None
+        price_source = None
         _price_filled = False
-        if part.get("ref") and hospital:
-            _suggested_price = db.price_suggestion(part["ref"], hospital)
-        if _suggested_price is not None:
+        _sugg = None
+        if part.get("ref"):
+            _sugg = suggest_price(db.learning_prices_for_part(part["ref"]), hospital)
+        if _sugg is not None:
             if unit_price is None:
-                unit_price = _suggested_price
-                price_conf = "medium"  # learned fill -> always eyeball it
+                unit_price = _sugg.value
+                price_conf = "medium"          # a fill is always eyeballed
+                price_source = _sugg.source
                 _price_filled = True
-                price_note = (f"Price ${_suggested_price:,.2f} filled from the "
-                              f"learned price for this hospital — verify")
-            elif abs(_suggested_price - unit_price) < settings.sum_tolerance:
-                price_conf = "high"  # learned price agrees -> confident
+                price_note = _sugg.basis + " — verify"
+            elif _sugg.source == "learned_price_cross":
+                # A cross-hospital figure fills a blank and says nothing more.
+                # Prices legitimately differ by hospital, so disagreement with
+                # one is not evidence of a misread, and flagging it would fill
+                # the Notes column with noise.
+                pass
+            elif abs(_sugg.value - unit_price) < settings.sum_tolerance:
+                # Agreement only counts when we are sure it is the same account.
+                if _sugg.may_confirm:
+                    price_conf = "high"
+                else:
+                    price_conf = "medium"
+                    price_note = (f"Matches a learned price, but for a hospital "
+                                  f"name only loosely matched to '{hospital}' "
+                                  f"— confirm")
             else:
-                price_conf = "medium"  # disagreement -> eyeball it (never replace)
+                price_conf = "medium"          # never replace a read price
                 price_note = (f"Price differs from the learned price "
-                              f"${_suggested_price:,.2f} for this hospital")
+                              f"${_sugg.value:,.2f} for this hospital")
 
         line_total = round(qty * unit_price, 2) if unit_price is not None else None
 
@@ -371,10 +433,22 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         # deterministic) is high; an OCR-read REF that still resolves in part_info
         # is medium (legible but a character could be misread); unresolved is low.
         if part.get("in_part_info"):
-            ref_conf = "high" if part.get("ref_source") == "gtin" else "medium"
+            ref_conf = ("high" if part.get("ref_source") in ("gtin", "barcode_240")
+                        else "medium")
             desc_conf = ref_conf
         elif part.get("ref"):
-            ref_conf = "medium" if part.get("ref_source") in ("gtin", "gtin_learned") else "low"
+            # A GS1-decoded REF is certain whether or not the master knows the
+            # part yet; the master's ignorance is a gap in our reference data,
+            # not a doubt about the number.
+            if part.get("ref_source") == "barcode_240":
+                ref_conf = "high"
+            else:
+                # Read off the label or written on the form, and the master has
+                # never heard of it — which is routine for disposables and for
+                # hip components the master hasn't caught up with. We still have
+                # the number: show it amber with the "not in part_info" flag
+                # beside it, rather than blanking a REF we were handed.
+                ref_conf = "medium"
             # A description recovered from a correction / the Expiry Log is a
             # real value (worth showing) but not master-confirmed -> medium.
             # One read off the operator's own handwriting is worth showing too,
@@ -407,13 +481,15 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         }
         if _price_filled:
             _price_trace.update({
-                "suggested": _suggested_price,
+                "suggested": _sugg.value,
+                "suggestion_source": _sugg.source,
                 "outcome": "filled_from_learned",
             })
-        elif _suggested_price is not None and unit_price is not None:
-            _diff = abs(_suggested_price - unit_price)
+        elif _sugg is not None and unit_price is not None:
+            _diff = abs(_sugg.value - unit_price)
             _price_trace.update({
-                "suggested": _suggested_price,
+                "suggested": _sugg.value,
+                "suggestion_source": _sugg.source,
                 "diff": round(_diff, 2),
                 "outcome": "matches_learned" if _diff < settings.sum_tolerance else "disagrees_with_learned",
             })
@@ -449,8 +525,20 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             },
         )
 
+        # Where each value came from, when it wasn't the obvious place. Read
+        # back by the learning harvest, which must not mistake a suggestion
+        # nobody touched for a human asserting a price.
+        smap = {}
+        if price_source:
+            smap["unit_price"] = price_source
+
         lines.append(row)
         line_conf.append(cmap)
+        line_source.append(smap)
+
+    # ---- the grand total as arithmetic, not just a cross-check ----
+    apportioned = _apportion_grand_total(
+        lines, line_conf, line_source, grand_total, freight, flags_early)
 
     # ---- validate (mutates ticket sum_line_totals, returns flags) ----
     ticket_for_validation = {
@@ -459,6 +547,24 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         "freight": freight,
     }
     flags = conf.validate_ticket(ticket_for_validation, lines)
+    flags = flags_early + flags
+    # A failed extraction must never look like a blank ticket. Without this the
+    # two are indistinguishable in the workbook: same empty cells, same red,
+    # same "batch complete". One whole batch of nine went out that way.
+    if weak_reads:
+        _pretty = {"rep_code": "DistCode", "po_number": "PO number",
+                   "surgery_date": "Surgery date", "patient_initials": "Initials"}
+        _names = ", ".join(_pretty.get(f, f.replace("_", " ").capitalize())
+                           for f in weak_reads)
+        flags.append(f"Read but the model was unsure: {_names} — confirm before use")
+
+    vision_error = vision.get("error") if isinstance(vision, dict) else None
+    if vision_error:
+        flags.insert(0, (
+            f"EXTRACTION FAILED ({vision_error}) — nothing handwritten on this "
+            f"ticket was read: no surgeon, hospital, date, prices or totals. "
+            f"Re-run it; do not treat the blanks as a blank ticket."
+        ))
     sum_line_totals = ticket_for_validation.get("sum_line_totals")
     header_vals["sum_line_totals"] = sum_line_totals
     header_conf["sum_line_totals"] = "high" if sum_line_totals is not None else "low"
@@ -473,9 +579,14 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
                 cm["unit_price"] = "medium"
             if cm.get("line_total") == "high":
                 cm["line_total"] = "medium"
-    elif grand_total is not None:
+    elif grand_total is not None and not apportioned:
         # Line prices sum to the handwritten Grand Total -> that agreement
         # validates them (spec: independent sources agree -> high).
+        #
+        # Only when the agreement is INDEPENDENT. If a price was just derived
+        # from that same total, the ticket reconciles by construction and the
+        # agreement proves nothing — promoting every price on the strength of it
+        # would be the tool citing its own arithmetic back to itself.
         header_conf["grand_total"] = "high"
         for cm in line_conf:
             if cm.get("unit_price") == "medium":
@@ -515,7 +626,7 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     # without a per-line insert/return cycle.
     line_rows: list[dict] = []
     fe_rows: list[dict] = []
-    for row, cmap, raw in zip(lines, line_conf, raw_blobs):
+    for row, cmap, smap, raw in zip(lines, line_conf, line_source, raw_blobs):
         line_id = new_id()
         line_rows.append({
             "line_id": line_id,
@@ -533,20 +644,30 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             fe_rows.append({
                 "ticket_id": ticket_id, "line_id": line_id, "field_name": fname,
                 "orig_value": None if row.get(fname) is None else str(row.get(fname)),
-                "confidence": cmap.get(fname, "low"), "source": _source_for(fname),
+                "confidence": cmap.get(fname, "low"),
+                "source": smap.get(fname) or _source_for(fname),
             })
 
     db.create_line_items(line_rows)
 
-    # Patient initials were read at ingest (patient.py) from the pre-mask image
-    # and stored on the ticket row; this module only ever sees the redacted
-    # photo, so carry the stored value through rather than re-reading it. Left
-    # out of ticket_patch on purpose — update_ticket merges, so reprocessing a
-    # ticket keeps the initials instead of blanking them.
-    header_vals["patient_initials"] = ticket_row.get("patient_initials")
-    header_conf["patient_initials"] = (
-        (ticket_row.get("patient_initials_conf") or "low").lower()
-        if ticket_row.get("patient_initials") else "low"
+    # Patient initials come from the one extraction call, like every other
+    # header field. They used to need a second, separate API call on a cropped
+    # sticker, because the stored image was masked and this module never saw the
+    # patient area; with the mask gone that crop — and the fixed fractional
+    # coordinates it depended on — is unnecessary.
+    #
+    # EXTRACT_PATIENT_INITIALS still decides whether the two letters are KEPT.
+    # It can no longer decide whether they are read: the sticker is in the image
+    # the model is shown either way. Off means the value is discarded here and
+    # never reaches the database or the workbook.
+    _inits = _clean_initials(_v(vheader.get("patient_initials")))
+    if not settings.extract_patient_initials:
+        _inits = None
+    header_vals["patient_initials"] = _inits
+    header_conf["patient_initials"] = conf.at_least_amber(
+        conf.score_field({"vision": _inits,
+                          "vision_conf": _c(vheader.get("patient_initials"))}),
+        _inits,
     )
 
     # ---- persist ticket header ----
@@ -556,6 +677,7 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
         "rep": header_vals.get("rep"),
         "rep_code": header_vals.get("rep_code"),
         "surgeon": header_vals.get("surgeon"),
+        "patient_initials": header_vals.get("patient_initials"),
         "hospital": header_vals.get("hospital"),
         "po_number": header_vals.get("po_number"),
         "freight": header_vals.get("freight"),
@@ -576,7 +698,100 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
     # One bulk insert for every field snapshot on this ticket.
     db.add_field_extractions(fe_rows)
 
-    return {"ticket_id": ticket_id, "line_count": len(line_rows), "flags": flags}
+    return {"ticket_id": ticket_id, "line_count": len(line_rows), "flags": flags,
+            "vision_error": vision_error}
+
+
+def _apportion_grand_total(lines, line_conf, line_source, grand_total, freight,
+                           ticket_flags: list) -> bool:
+    """Fill the one unpriced line from what the grand total leaves over.
+
+    The circled Grand Total is the biggest, clearest, most deliberate figure on
+    these tickets, and when exactly one line has no price the arithmetic gives
+    that price exactly. The residual was already being computed — for a log
+    message — and then thrown away, while the blank cell went red and the
+    reviewer was asked to work out a number the tool was holding.
+
+    Returns whether a price was written, because the caller must NOT then treat
+    the ticket's reconciliation as independent evidence: after this, the lines
+    add up to the total by construction, and promoting every price to confident
+    on the strength of that would be circular.
+    """
+    if grand_total is None:
+        return False
+    priced = sum((ln.get("line_total") or 0) for ln in lines)
+    residual = round(float(grand_total) - float(freight or 0) - float(priced), 2)
+    blanks = [i for i, ln in enumerate(lines) if ln.get("unit_price") is None]
+
+    if not blanks:
+        return False
+    if len(blanks) > 1:
+        if residual > settings.sum_tolerance:
+            each = round(residual / len(blanks), 2)
+            ticket_flags.append(
+                f"The grand total leaves ${residual:,.2f} unaccounted across "
+                f"{len(blanks)} lines with no price (about ${each:,.2f} each if "
+                f"they are equal) — fill them in")
+        return False
+
+    i = blanks[0]
+    row, cm = lines[i], line_conf[i]
+    qty = row.get("qty") or 1
+    unit = round(residual / qty, 2)
+
+    if row.get("wasted"):
+        row["flags"].append(
+            f"The grand total implies ${unit:,.2f} for this wasted line — whether "
+            f"a wasted component is billed is a business decision, so it was "
+            f"left blank")
+        return False
+    if residual <= settings.sum_tolerance:
+        # Never write a zero: a zero price asserts "this was free", which is a
+        # different claim from "we don't know".
+        row["flags"].append(
+            "The other lines already account for the whole grand total — this "
+            "line may not be billable")
+        return False
+    if unit >= settings.price_sanity_max:
+        row["flags"].append(
+            f"The grand total implies ${unit:,.2f} for this line, which is too "
+            f"large to be plausible — left blank rather than filled in")
+        return False
+
+    row["unit_price"] = unit
+    row["line_total"] = round(qty * unit, 2)
+    cm["unit_price"] = "medium"
+    # Derived, not read: the Line Total must not render as confident either.
+    cm["line_total"] = "medium"
+    line_source[i]["unit_price"] = "grand_total_residual"
+
+    note = (f"Price ${unit:,.2f} derived from the grand total — this is the only "
+            f"line without a price")
+    if freight is None:
+        note += ". No freight was read, so this assumes there is none"
+        ticket_flags.append(
+            "A price was derived from the grand total with no freight figure "
+            "read — if this ticket has a delivery fee, that money is currently "
+            "inside that line's price")
+    if qty > 1 and abs(round(qty * unit, 2) - residual) > settings.sum_tolerance:
+        note += f". ${residual:,.2f} does not divide evenly across {qty} units"
+    note += ". Verify"
+    row["flags"].append(note)
+    return True
+
+
+def _clean_initials(value) -> str | None:
+    """Exactly two letters, or nothing.
+
+    Rejects rather than truncates. Truncating "John Doe" to "JO" would be the
+    worst possible outcome — a wrong answer wearing the shape of a right one,
+    in a column nobody has any way to check. Punctuation and spacing are
+    tolerated ("J.D.", "j d") because they are formatting, not content.
+    """
+    if value is None:
+        return None
+    letters = re.sub(r"[^A-Za-z]", "", str(value))
+    return letters.upper() if len(letters) == 2 else None
 
 
 def _source_for(field: str) -> str:
