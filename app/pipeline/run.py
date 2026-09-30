@@ -123,11 +123,28 @@ def process_ticket(ticket: dict) -> dict:
     # Deterministic first: decode device labels from the grid region. Junk
     # payloads (e.g. a patient wristband barcode) are filtered out before the
     # vision merge so they can't occupy a line slot or shift the pairing.
-    grid = _grid_crop(img, template)
-    labels = barcode.drop_junk_labels(barcode.decode_region(grid)) if grid is not None else []
+    # Two passes, pooled. The grid crop is tuned to the Maxx ticket and a
+    # distributor's own form puts its stickers somewhere else entirely — but the
+    # crop is not simply worse: cropping raises the effective resolution of what
+    # the decoder sees, so on a big page it finds codes a whole-page pass misses,
+    # and on a differently-laid-out form it misses codes the whole page finds.
+    # Measured on real files, neither region dominates, so both run.
+    labels = []
+    if img is not None:
+        grid = _grid_crop(img, template)
+        labels = barcode.drop_junk_labels(barcode.merge_labels(
+            barcode.decode_region(grid) if grid is not None else [],
+            barcode.decode_region(img),
+        ))
 
     # The vision read: header, prices, qty, totals. One call per ticket.
-    vresult = vision.extract_handwritten(image_bytes)
+    #
+    # A capped copy, not the stored bytes. Barcodes above got the image at full
+    # resolution because they need every pixel; every vision provider
+    # downsamples a large image server-side before looking at it, so sending
+    # the full page buys no accuracy and costs upload time and tokens.
+    vision_bytes = preprocess.for_vision(img) if img is not None else image_bytes
+    vresult = vision.extract_handwritten(vision_bytes)
 
     # If vision returned more priced lines than decoded labels, pad with empty
     # label dicts so vision-only lines still appear (barcode failed on those).

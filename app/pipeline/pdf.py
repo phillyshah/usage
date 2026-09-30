@@ -29,9 +29,15 @@ log = logging.getLogger("pipeline.pdf")
 # calls. Real tickets are a handful of pages.
 MAX_PAGES = 50
 
-# 200 DPI keeps a US-Letter page ~3.7 MP — under barcode._raw_payloads' 4 MP
-# shrink threshold, so DataMatrix decode behaves like a phone photo.
-DEFAULT_DPI = 200
+# 400 DPI, raised from 200 after measuring it. On a real ticket, 200 decoded
+# three of four DataMatrix codes and 400 decoded all four: the fourth simply had
+# too few pixels per module to be readable, and no amount of post-processing
+# recovers detail that was never rendered.
+#
+# The cost of rendering large is now paid only where it helps. Barcodes get the
+# full-resolution page; the vision model gets a copy capped by
+# preprocess.for_vision, because every provider downsamples a big image anyway.
+DEFAULT_DPI = 400
 
 
 def available() -> bool:

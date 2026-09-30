@@ -5,9 +5,25 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.23.0"
+VERSION = "2.24.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.24.0",
+        "date": "2026-09-30",
+        "notes": [
+            "Far better at finding the barcodes, especially on forms that "
+            "aren't the Maxx ticket. A distributor's own form that produced "
+            "nothing at all now reads three of its four stickers, and a normal "
+            "Maxx ticket that was quietly losing one now reads all four",
+            "PDFs are rendered at higher resolution before anything reads "
+            "them. A barcode that was too small to decode can't be recovered "
+            "afterwards, so it has to be rendered large in the first place",
+            "The picture sent to the AI is scaled down separately. It reads "
+            "the same either way, so there was no reason to be paying to "
+            "upload a much bigger one",
+        ],
+    },
     {
         "version": "2.23.0",
         "date": "2026-09-30",
