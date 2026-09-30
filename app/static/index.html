@@ -369,6 +369,18 @@
         <div id="metrics-chart" class="metrics" aria-live="polite"></div>
       </section>
 
+      <!-- 1b. Where the tool is getting it wrong -->
+      <section class="card" aria-labelledby="accuracy-title">
+        <h2 class="step-title" id="accuracy-title">What you keep having to fix</h2>
+        <p class="step-help">Every correction you've sent back, grouped by which field it was.
+           The fields at the top are costing you the most review time &mdash; and the
+           <strong>&ldquo;wrong without warning&rdquo;</strong> column is the one worth watching:
+           those are cells the tool was confident about, so nothing was coloured and nobody
+           was asked to check them.</p>
+        <div id="accuracy-headline" aria-live="polite"></div>
+        <div id="accuracy-table" aria-live="polite"></div>
+      </section>
+
       <!-- 2. What the tool has learned -->
       <section class="card" aria-labelledby="learning-totals-title">
         <h2 class="step-title" id="learning-totals-title">What the tool has learned</h2>

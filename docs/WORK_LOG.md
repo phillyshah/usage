@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-09-29.
+Last updated: 2026-09-30.
 
 ---
 
@@ -16,13 +16,13 @@ Last updated: 2026-09-29.
 
 | | |
 |---|---|
-| Version in `main` | **2.16.0** (PR #45); **2.17.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.16.0** |
+| Version in `main` | **2.17.0** (PR #46); **2.18.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.17.0** — confirmed live 2026-09-29 |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env` (verified via `docker compose exec labels-api printenv`) |
 | Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
 | Effort | `medium` extraction, `low` initials |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 323 passed, 2 skipped |
+| Tests | 334 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -120,6 +120,54 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### Measure where accuracy is lost before spending on improving it
+
+Asked how to dramatically improve accuracy, the honest answer was that nobody
+knew where it was failing. Every defect diagnosed over this stretch — dropped
+handwritten lines, five spellings of one entity, a clipped surgery date,
+hospitals matching the wrong facility — was plumbing, prompt or reference data.
+**None of them would have been fixed by a better model or a higher effort
+level**, which is where the instinct points.
+
+`corrections_audit` had recorded every human fix since 2.9.0 and nothing read it
+but a per-day count. `metrics.correction_accuracy` now groups it by field, and
+the split is the point:
+
+| split | the tool... | what it implies |
+|---|---|---|
+| `blank` (conf `low`) | declined to guess; cell was red | a coverage problem |
+| `amber` (conf `medium`) | guessed, flagged it, was wrong | calibration works, accuracy doesn't |
+| `silent` (conf `high`) | **was confident and wrong** | nothing was coloured; nobody was asked |
+
+The third column is the one to act on and the one that never existed before. It
+falls out of `diff._audit_one` for free: that function sets `was_blank` for
+`low` and `was_low_conf` for `medium`, so `high` is the case carrying neither
+flag. Read the panel after a couple of weeks of real tickets before choosing
+between the two bigger options below.
+
+### The two bigger accuracy options, not yet built
+
+Recorded so the reasoning isn't lost, and because both are more invasive than
+anything shipped so far:
+
+**Crop per label cell instead of sending the whole page.** The barcode path
+crops `grid_region` (`run.py:162`) and scored 5/5 on a real ticket; the vision
+call gets the entire page and must read the header, find every label, read every
+handwritten price AND match each price to the right label in one pass.
+`app/pipeline/align.py` exists solely to repair the alignment it gets wrong.
+Sending each label cell with its own price box makes the alignment problem stop
+existing rather than be corrected afterwards. Cost is N calls per ticket against
+one; the static prompt is already cached, so this needs measuring, not assuming.
+
+**Use the grand total as a checksum that corrects, not just flags.**
+`assemble.py:488` already reconciles lines + freight against the handwritten
+total and downgrades prices to amber on a mismatch — but never asks *which* line
+is wrong, even when the difference names it exactly (a $175 gap was precisely
+three missing pin lines). Re-reading only the implicated cell is targeted at the
+highest-value, least reliable field. Anything it changes must land amber, never
+high: a reconciliation that "fixes" its way to a wrong answer that happens to
+sum is worse than the mismatch.
 
 ### A ticket has two kinds of line, and only one of them has a label
 
@@ -473,6 +521,12 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.18.0 — Per-field accuracy report
+A History panel grouping every correction by field, worst first, split into
+blank / amber / **wrong-without-warning**. No migration; the data has been in
+`corrections_audit` since 2.9.0 and nothing had ever read it. See "Decisions"
+above for how to read it and what it is meant to decide.
 
 ### 2.17.0 — Handwritten lines, and a mask that ate the header
 Three defects found on the first real ticket photographs. Handwritten line items
