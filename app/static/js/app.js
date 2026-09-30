@@ -359,6 +359,38 @@ function renderUploadResult(data) {
 const runBtn = $("#run-btn");
 const runProgress = $("#run-progress");
 const runResult = $("#run-result");
+const visionCheckBtn = $("#vision-check-btn");
+const visionCheckResult = $("#vision-check-result");
+
+// One small live call to the AI reader. This exists because the app has twice
+// been in the state where the web process was healthy and every extraction was
+// being rejected — and the only way to find out was to run a whole batch and
+// read the result.
+visionCheckBtn.addEventListener("click", async () => {
+  visionCheckBtn.disabled = true;
+  visionCheckResult.hidden = true;
+  try {
+    const data = await api.visionHealth();
+    if (data && data.ok) {
+      renderNotice(visionCheckResult, "success", "The AI reader is working",
+        [el("p", { class: "notice-text",
+          text: data.detail || `Answering as ${data.model || "the configured model"}. Go ahead and extract.` })]);
+    } else {
+      // The raw error goes in renderNotice's technical-detail block, which is
+      // collapsible and copyable — it is the string that actually diagnoses it.
+      renderNotice(visionCheckResult, "error", "The AI reader can't be reached",
+        [el("p", { class: "notice-text",
+          text: "Extraction would return nothing on every ticket. Show your team lead the technical detail below — it says exactly what's wrong." })],
+        (data && data.error) || "unknown error");
+    }
+  } catch (err) {
+    renderNotice(visionCheckResult, "error", "Couldn't run the check",
+      [el("p", { class: "notice-text", text: "The app itself didn't respond." })],
+      errorDetail(err));
+  } finally {
+    visionCheckBtn.disabled = false;
+  }
+});
 
 /** Step 2 is actionable only once tickets have been uploaded this session. */
 function setStep2Ready(ready) {
@@ -384,10 +416,22 @@ runBtn.addEventListener("click", async () => {
     loadBatches(); // refresh the history list
   } catch (err) {
     runProgress.hidden = true;
-    renderNotice(runResult, "error", "We couldn't process the batch",
-      [el("p", { class: "notice-text", text: "Please wait a moment and try again. If it keeps happening, tell your team lead." })],
-      errorDetail(err));
-    toast("error", "Processing failed", "Please try again.");
+    const detail = errorDetail(err);
+    // Branch on the status code, not on the text of an error message. Matching
+    // on message text is exactly the class of mistake that produced this
+    // release; the status is structured and ApiError already carries it.
+    if (err && err.status === 503) {
+      renderNotice(runResult, "error", "The AI reader can't be reached — nothing was processed",
+        [el("p", { class: "notice-text",
+          text: "Your tickets are untouched and still waiting, so nothing was half-done. This is a configuration problem rather than anything you did — show your team lead the technical detail below." })],
+        detail);
+      toast("error", "Nothing was processed", "The AI reader can't be reached.");
+    } else {
+      renderNotice(runResult, "error", "We couldn't process the batch",
+        [el("p", { class: "notice-text", text: "Please wait a moment and try again. If it keeps happening, tell your team lead." })],
+        detail);
+      toast("error", "Processing failed", "Please try again.");
+    }
   } finally {
     runBtn.disabled = false; // re-enable so a re-run is possible
   }

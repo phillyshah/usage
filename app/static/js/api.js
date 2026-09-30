@@ -102,6 +102,15 @@ export const api = {
     });
   },
 
+  /**
+   * GET /health/vision -> 200 {ok, model, error}
+   * One small live call to the AI reader. Answers in seconds, where the only
+   * other way to learn the reader is misconfigured was to run a whole batch.
+   */
+  visionHealth() {
+    return request("/health/vision", { method: "GET" });
+  },
+
   /** GET /batches -> [{batch_id, run_date, ticket_count, status}] */
   listBatches() {
     return request("/batches", { method: "GET" });

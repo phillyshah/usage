@@ -16,13 +16,13 @@ Last updated: 2026-09-30.
 
 | | |
 |---|---|
-| Version in `main` | **2.18.0** (PR #47); **2.19.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
-| Deployed | **2.17.0** — confirmed live 2026-09-29. 2.18.0 and 2.19.0 both undeployed |
+| Version in `main` | **2.19.0** (PR #48); **2.20.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
-| Model | `claude-sonnet-5` (`ANTHROPIC_MODEL`, default in `app/config.py`) |
-| Effort | `medium` extraction. The separate initials call is gone (2.19.0) |
+| Model | `claude-sonnet-5-5` from 2.20.0 — **but the VPS `.env` pins `ANTHROPIC_MODEL` and wins**, so the move needs an `.env` edit as well as a pull |
+| Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 386 passed, 1 skipped |
+| Tests | 395 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -516,6 +516,80 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.20.0 — The fix that broke it a second way
+
+2.19.0 shipped, merged, deployed. Andy re-ran the same nine tickets and got the
+new banner: **"9 tickets couldn't be read."**
+
+The banner was 2.19.0's error reporting working exactly as intended. The failure
+it reported was mine.
+
+```python
+thinking={"type": "enabled", "budget_tokens": 4000},   # 2.19.0
+```
+
+**`budget_tokens` is rejected with a 400 on this model family.** Before 2.19.0
+the call sent `thinking={"type": "adaptive"}` — the correct, and only, on-mode.
+Fixing the token-budget problem I replaced a working parameter with a rejected
+one, and every call 400'd from the moment it deployed.
+
+So there were two faults, and 2.19.0 fixed one and introduced the other:
+
+| | |
+|---|---|
+| Original outage (Sep 30, silent) | Best-supported cause: `max_tokens=8000` covering thinking *and* output, truncating the JSON. 2.19.0's raise to 16000 stands. |
+| Second outage (loud) | `budget_tokens` on a model that rejects it. |
+
+**The lesson, and it is the one worth keeping.** 393 tests were green while every
+single API call was malformed. Every vision test patches `anthropic.Anthropic`,
+so `messages.create` is a `MagicMock` that accepts any keyword argument ever
+invented. **A mocked client cannot validate an API contract.** This code has now
+failed twice at the boundary between our process and the API, and until 2.20.0
+nothing in the repo had ever exercised that boundary.
+
+What that bought:
+
+- `vision.check_connection()` — one small live call that **sends the same
+  parameter shape as a real extraction**, via a shared `_request_params()` so
+  the two cannot drift. Exposed as `GET /health/vision` and a "Test AI
+  connection" button. Answers in seconds; the previous way to learn this was to
+  run nine tickets and read the result.
+- `run_batch` preflights and **raises `VisionUnavailable` rather than
+  processing**. A batch that can read nothing should not consume the tickets and
+  hand back a barcode-only spreadsheet that looks finished. Tickets stay
+  `pending_review`.
+- Request-shape guards in `tests/test_vision_caching.py`: thinking is adaptive,
+  `budget_tokens` appears nowhere in the request, effort is `high`,
+  `max_tokens >= 16000`. They still cannot validate the contract — only the live
+  check does — but they pin the shape we mean to send, and they would have
+  caught this.
+
+Also moved to `claude-sonnet-5-5` (current Sonnet, same $2/$10) and effort to
+`high`: 5.5 recalibrated the levels, so the `medium` tuned against Sonnet 5 no
+longer means what it did, and this is careful reading of handwriting at ~100
+tickets a day where accuracy is the whole complaint.
+
+A refusal (`stop_reason == "refusal"`, HTTP 200, no text) is now reported as a
+refusal with its category, rather than falling through to the parser and being
+called "unparseable response" — true, but it would send the next person hunting
+in the wrong place.
+
+**Three defects in the same change, all found by reading the diff rather than by
+the suite, all in UI code nothing covers.** Recorded because the pattern is the
+point: the 503 carried a dict `detail`, and `api.js` only unwraps a string one,
+so the browser saw a bare "503 Service Unavailable" and the UI offered "try
+again" — the one piece of advice that cannot help with a misconfiguration. The
+branch that was supposed to catch it matched on **message text**, which is the
+same class of mistake as the one that caused the release; it now branches on
+`err.status`. And it rendered the error through a CSS class I had invented,
+while `renderNotice` already takes a `detail` argument that builds a collapsible
+technical block. `tests/test_vision_failure.py` now exercises the route.
+
+Deliberately not bundled: the server-side `fallbacks` parameter, which retries a
+declined request on another model. It needs the beta messages endpoint and a
+beta header, and adding a beta endpoint to a call that has broken twice was the
+wrong trade. Worth doing once the pipeline is confirmed healthy.
 
 ### 2.19.0 — The batch that came back 54% red
 

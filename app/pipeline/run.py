@@ -19,6 +19,7 @@ import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+from app.config import settings
 from app.db import db
 from app.pipeline import assemble, barcode, preprocess, vision
 from app.pipeline import transient
@@ -26,6 +27,15 @@ from app.pipeline.template import detect_template, geometry_for
 from app.storage import TICKET_IMAGES, get_object, put_object, split_ref
 
 log = logging.getLogger("pipeline.run")
+
+
+class VisionUnavailable(RuntimeError):
+    """The AI reader could not be reached, so the batch did not start.
+
+    Deliberately raised rather than swallowed: every ticket in the batch would
+    come back with nothing handwritten read, and the tickets stay
+    pending_review so a re-run picks them up untouched.
+    """
 
 
 def _is_transient(exc: Exception) -> bool:
@@ -158,6 +168,17 @@ def run_batch(batch_id: str | None = None) -> dict:
     """Process all pending tickets (optionally just one batch) and write the sheet."""
     from app.sheets.write import write_review_workbook
     from app.storage import OUTPUT_SHEETS
+
+    # Preflight. A batch that cannot read anything should not consume the
+    # tickets and hand back a barcode-only spreadsheet that looks finished: one
+    # small call answers in seconds, where nine tickets answered in minutes and
+    # left every one of them marked processed. Skipped in OFFLINE_MODE, where
+    # the deterministic path is the whole point.
+    if settings.has_anthropic:
+        probe = vision.check_connection()
+        if not probe["ok"]:
+            log.error("batch aborted — the AI reader is unreachable: %s", probe["error"])
+            raise VisionUnavailable(probe["error"] or "the AI reader is unreachable")
 
     pending = db.pending_tickets(batch_id)
     if not pending and batch_id:
