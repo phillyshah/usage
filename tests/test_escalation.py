@@ -190,3 +190,28 @@ def test_nothing_is_escalated_when_escalation_is_unavailable():
         _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=None),
         None, escalate_model=None)
     assert calls == ["primary"]
+
+
+def test_escalating_to_the_model_that_just_read_it_is_refused():
+    """Paying twice to ask one model the same question. Easy to arrange by
+    accident: point VISION_PROVIDER at anthropic with ANTHROPIC_MODEL already
+    equal to the escalation model, and every ticket with a gap is read twice
+    for nothing."""
+    with patch.object(vision.settings, "vision_provider", "anthropic"), \
+         patch.object(vision.settings, "anthropic_api_key", "k"), \
+         patch.object(vision.settings, "anthropic_model", "claude-opus-5-5"), \
+         patch.object(vision.settings, "vision_escalate_model", "claude-opus-5-5"), \
+         patch.object(vision.settings, "offline_mode", False):
+        cfg, why = vision.escalation_configuration()
+    assert cfg is None and "same model" in why
+
+
+def test_a_weaker_primary_still_escalates():
+    """Sonnet -> Opus is a real escalation and must keep working."""
+    with patch.object(vision.settings, "vision_provider", "anthropic"), \
+         patch.object(vision.settings, "anthropic_api_key", "k"), \
+         patch.object(vision.settings, "anthropic_model", "claude-sonnet-5-5"), \
+         patch.object(vision.settings, "vision_escalate_model", "claude-opus-5-5"), \
+         patch.object(vision.settings, "offline_mode", False):
+        cfg, why = vision.escalation_configuration()
+    assert cfg is not None and cfg["model"] == "claude-opus-5-5"

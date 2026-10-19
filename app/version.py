@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.25.0"
+VERSION = "2.25.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.25.1",
+        "date": "2026-10-19",
+        "notes": [
+            "A ticket is no longer re-read by the same model that just read "
+            "it. If the main reader is already set to the strong model, a "
+            "second read asks the same model the same question and bills you "
+            "twice for the answer",
+        ],
+    },
     {
         "version": "2.25.0",
         "date": "2026-09-30",
