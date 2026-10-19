@@ -746,6 +746,18 @@ def metrics_auto_resolve_daily(days: int = 14):
     return auto_resolve_by_day(days)
 
 
+@app.get("/metrics/spend")
+def metrics_spend(days: int = 14):
+    """What the reading has cost, per day and per model.
+
+    Exists because a spend cap arrived twice as a failed run — once on each
+    provider — while the token counts sat in every API response unrecorded.
+    """
+    from app.metrics import vision_spend
+
+    return vision_spend(days)
+
+
 @app.get("/metrics/accuracy")
 def metrics_accuracy(days: int = 14):
     """Which fields humans actually have to fix, worst first.

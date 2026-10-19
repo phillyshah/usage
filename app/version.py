@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.25.1"
+VERSION = "2.26.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.26.0",
+        "date": "2026-10-19",
+        "notes": [
+            "New 'What the reading costs' panel in History: what the AI has "
+            "cost over the last fortnight, what that works out to per month at "
+            "the current rate, the cost per ticket, and how often a ticket "
+            "needed the second, more expensive read",
+            "The 5pm email now carries the month-to-date figure. Both "
+            "providers have stopped a batch by hitting a spending limit, and "
+            "both times the first anybody knew was the failed run — the "
+            "numbers were there all along and nothing was keeping them",
+            "Costs are estimates from published prices. A model we have no "
+            "price on file for shows its usage and no dollar figure, rather "
+            "than a total that quietly leaves it out",
+        ],
+    },
     {
         "version": "2.25.1",
         "date": "2026-10-19",

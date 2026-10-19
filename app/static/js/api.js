@@ -173,6 +173,11 @@ export const api = {
    * GET /metrics/accuracy?days=N
    * -> {total, silent, silent_rate, by_confidence, by_field:[...]}
    */
+  /** GET /metrics/spend?days= -> what the reading cost, per day and per model. */
+  spendMetrics(days = 14) {
+    return request(`/metrics/spend?days=${encodeURIComponent(days)}`, { method: "GET" });
+  },
+
   accuracyMetrics(days = 14) {
     return request(`/metrics/accuracy?days=${encodeURIComponent(days)}`, {
       method: "GET",

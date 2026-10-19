@@ -516,6 +516,7 @@ $("#corrections-form").addEventListener("submit", async (e) => {
     correctionsPicker.clear();
     loadMetrics();
     loadLearning();
+    loadSpend();
     loadAccuracy();
     loadUploads();
   } catch (err) {
@@ -941,6 +942,64 @@ async function loadReferenceStatus() {
 /* ===================================================================== *
  *  What you keep having to fix — per-field correction breakdown
  * ===================================================================== */
+/* --------------------------------------------------- what the reading costs */
+const spendHeadline = $("#spend-headline");
+const spendTable = $("#spend-table");
+
+// Both providers have stopped a batch by hitting a spending limit, and both
+// times the only warning was the failed run. The token counts were in every
+// response all along; this is what keeps them.
+async function loadSpend() {
+  let d;
+  try {
+    d = await api.spendMetrics(14);
+  } catch {
+    return;                       // panel simply stays empty
+  }
+  if (!d || !d.tickets) {
+    spendHeadline.replaceChildren(el("div", { class: "empty-state" }, [
+      el("strong", { text: "Nothing to show yet" }),
+      el("span", { text: "Once a batch has been read, this will show what it cost." }),
+    ]));
+    spendTable.replaceChildren();
+    return;
+  }
+
+  const money = (v) => `$${Number(v || 0).toFixed(2)}`;
+  spendHeadline.replaceChildren(el("div", { class: "stat-grid" }, [
+    stat(money(d.total_usd), `spent in ${d.days} days`),
+    stat(money(d.projected_month_usd), "a month at this rate"),
+    stat(`$${Number(d.usd_per_ticket || 0).toFixed(3)}`, "per ticket"),
+    stat(`${Math.round((d.escalation_rate || 0) * 100)}%`, "needed a second read"),
+  ]));
+
+  const head = el("tr", {}, [
+    el("th", { text: "Model" }),
+    el("th", { text: "Reads" }),
+    el("th", { text: "Tokens in" }),
+    el("th", { text: "Tokens out" }),
+    el("th", { text: "Cost" }),
+  ]);
+  const rows = Object.entries(d.by_model || {}).map(([model, m]) =>
+    el("tr", {}, [
+      el("td", { text: model }),
+      el("td", { text: String(m.reads) }),
+      el("td", { text: Number(m.tokens_in).toLocaleString() }),
+      el("td", { text: Number(m.tokens_out).toLocaleString() }),
+      // A model we have no published price for contributes tokens and no
+      // dollars. Saying "—" is honest; a 0 would understate the bill.
+      el("td", { text: m.priced ? money(m.usd) : "—" }),
+    ]));
+  const kids = [el("table", { class: "batches" }, [
+    el("thead", {}, [head]), el("tbody", {}, rows)])];
+  if ((d.unpriced_models || []).length) {
+    kids.push(el("p", { class: "step-help",
+      text: `No published price on file for ${d.unpriced_models.join(", ")}, so `
+          + `the total above leaves it out.` }));
+  }
+  spendTable.replaceChildren(...kids);
+}
+
 const accuracyHeadline = $("#accuracy-headline");
 const accuracyTable = $("#accuracy-table");
 
@@ -1934,6 +1993,7 @@ debugForm.addEventListener("submit", async (e) => {
 checkHealth();
 loadBatches();
 loadMetrics();
+loadSpend();
 loadAccuracy();
 loadLearning();
 loadUploads();

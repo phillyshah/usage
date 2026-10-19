@@ -58,7 +58,7 @@ def confidence_map_for_ticket(ticket_id: str) -> dict:
     lines: dict = {}
     for fe in db.field_extractions_for_ticket(ticket_id):
         field = fe.get("field_name")
-        if not field or field == "raw_blob":
+        if not field or field in ("raw_blob", "vision_usage"):
             continue
         c = (fe.get("confidence") or "low").lower()
         line_id = fe.get("line_id")
@@ -710,6 +710,17 @@ def assemble_and_persist(ticket_row: dict, vision: dict, labels: list[dict]) -> 
             "orig_value": None if header_vals.get(fname) is None else str(header_vals.get(fname)),
             "confidence": header_conf.get(fname, "low"),
             "source": "vision" if fname not in ("sum_line_totals",) else "computed",
+        })
+
+    # What the read cost, recorded like raw_blob — a JSON row on the ticket, so
+    # no migration. Two spend caps in three weeks were both discovered by a
+    # failed run, because the token counts existed and nothing kept them.
+    _usage = vision.get("usage") if isinstance(vision, dict) else None
+    if _usage:
+        fe_rows.append({
+            "ticket_id": ticket_id, "line_id": None, "field_name": "vision_usage",
+            "orig_value": json.dumps(_usage), "confidence": "high",
+            "source": "computed",
         })
 
     # One bulk insert for every field snapshot on this ticket.

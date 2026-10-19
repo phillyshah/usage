@@ -51,6 +51,36 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_PRIVACY = {"data_collection": "deny"}
 
 
+# Dollars per MILLION tokens, (input, output). Used only to turn the token
+# counts we already receive into a number somebody can act on.
+#
+# A LOOKUP, NOT A CONTRACT. Published prices move and models get renamed, so an
+# unknown model reports its TOKENS and no dollar figure rather than a confident
+# wrong one — see estimate_cost. Correct these when a provider changes them;
+# nothing breaks if they are briefly stale except the estimate's accuracy.
+# Checked 2026-09-30.
+MODEL_PRICES = {
+    "qwen/qwen3-vl-235b-a22b-instruct": (0.20, 0.88),
+    "qwen/qwen3-vl-32b-instruct": (0.104, 0.416),
+    "claude-opus-5-5": (4.00, 20.00),
+    "claude-sonnet-5-5": (2.00, 10.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+}
+
+
+def estimate_cost(model: str | None, tokens_in, tokens_out) -> float | None:
+    """Dollars for one call, or None when we cannot say honestly.
+
+    None rather than 0.0: a zero would quietly understate a bill, and the whole
+    point of this is to stop a spend cap arriving as a surprise.
+    """
+    price = MODEL_PRICES.get((model or "").strip())
+    if not price or tokens_in is None or tokens_out is None:
+        return None
+    return round((tokens_in * price[0] + tokens_out * price[1]) / 1_000_000, 6)
+
+
 def _provider() -> str:
     name = (settings.vision_provider or "").strip().lower()
     return name if name in ("anthropic", "openrouter") else "anthropic"
@@ -359,6 +389,9 @@ def merge_reads(primary: dict, escalated: dict) -> dict:
         merged.append(row)
     out["lines"] = merged
     out["error"] = None
+    # Both calls were paid for; the merged ticket has to account for both or
+    # escalation would look free in the numbers.
+    out["usage"] = (primary.get("usage") or []) + (escalated.get("usage") or [])
     return out
 
 
@@ -615,6 +648,18 @@ def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg",
                 "grand_total": result.get("grand_total"),
             },
         )
+        # Carried on the result so the ticket can record what it cost. The
+        # counts were already being computed for the trace and then dropped,
+        # which is why "why is this costing what it is" had no answer inside
+        # the app — only in a provider's console, after the fact.
+        result["usage"] = [{
+            "provider": cfg["provider"],
+            "model": served,
+            "escalated": bool(escalate),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "usd": estimate_cost(served, tokens_in, tokens_out),
+        }]
         if err:
             log.error("vision extraction produced no usable result: %s", err)
         return result
