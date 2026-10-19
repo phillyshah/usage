@@ -54,6 +54,11 @@ class DayStatus:
     # Last, with a default, so the positional constructions in the tests and any
     # older caller keep meaning what they did.
     tickets_unread: int = 0       # processed, but the reader returned nothing
+    # What the AI reading has cost so far this month, and the run-rate
+    # projection. Here because a spend cap has twice stopped a batch and the
+    # first anybody knew of it was the failure.
+    spend_mtd_usd: float = 0.0
+    spend_projected_usd: float = 0.0
 
     @property
     def ran(self) -> bool:
@@ -71,6 +76,24 @@ class DayStatus:
         """Work was uploaded but never turned into a workbook. Its own state:
         the team did their part and the output is still sitting there."""
         return self.tickets_uploaded > 0 and self.batches_generated == 0
+
+
+def _spend_fields() -> dict:
+    """Month-to-date AI spend, or zeros if it cannot be computed.
+
+    Never raises: a status email that fails because a cost estimate failed
+    would lose the part people actually rely on.
+    """
+    try:
+        from app.metrics import vision_spend
+
+        today = datetime.now(_tz()).date()
+        s = vision_spend(days=max(1, today.day))
+        return {"spend_mtd_usd": s.get("total_usd") or 0.0,
+                "spend_projected_usd": s.get("projected_month_usd") or 0.0}
+    except Exception:  # pragma: no cover - never sink the email
+        log.warning("could not compute AI spend for the status email", exc_info=True)
+        return {}
 
 
 def _tz() -> ZoneInfo:
@@ -149,6 +172,7 @@ def collect_status(today=None) -> DayStatus:
         tickets_unread=sum(1 for t in todays
                            if any("EXTRACTION FAILED" in str(f)
                                   for f in (t.get("flags") or []))),
+        **_spend_fields(),
         price_runs=price_runs,
         consecutive_misses=misses,
     )
@@ -224,6 +248,9 @@ def render(status: DayStatus, app_url: str = "https://usage.90ten.life") -> tupl
         ("Awaiting review", status.tickets_pending),
         ("Verified", status.tickets_verified),
         ("Could not be read", status.tickets_unread),
+        ("AI cost this month", f"${status.spend_mtd_usd:,.2f} "
+                               f"(about ${status.spend_projected_usd:,.2f} "
+                               f"by month end)"),
         ("Price enrichment runs", status.price_runs),
     ]
     text = "\n".join([

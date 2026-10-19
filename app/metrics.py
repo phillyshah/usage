@@ -6,6 +6,7 @@ total cells, grouped by the ISO week of the ticket's creation.
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -360,3 +361,79 @@ def _is_stale(last_learned: str | None) -> bool:
     if not dt:
         return True
     return dt < datetime.now(timezone.utc) - timedelta(days=STALE_DAYS)
+
+
+def vision_spend(days: int = 14) -> dict:
+    """What the reading has cost, per day and per model.
+
+    Exists because a spend cap arrived twice as a failed run. The token counts
+    were in every API response and were being dropped on the floor, so the only
+    place that could answer "where is the money going" was a provider console,
+    after the fact.
+
+    Dollar figures are ESTIMATES from vision.MODEL_PRICES. A model that is not
+    in that table contributes its tokens and no dollars, and says so through
+    ``priced`` — an understated total would defeat the point.
+    """
+    from app.pipeline.vision import estimate_cost  # noqa: F401  (pricing lives there)
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    by_day: dict[str, dict] = defaultdict(
+        lambda: {"usd": 0.0, "tokens_in": 0, "tokens_out": 0, "reads": 0})
+    by_model: dict[str, dict] = defaultdict(
+        lambda: {"usd": 0.0, "tokens_in": 0, "tokens_out": 0, "reads": 0,
+                 "escalations": 0, "priced": True})
+    tickets_read: set = set()
+    escalated_tickets: set = set()
+    unpriced: set = set()
+
+    for fe in db.backend.select("field_extractions"):
+        if fe.get("field_name") != "vision_usage":
+            continue
+        dt = _parse_dt(fe.get("created_at"))
+        if not dt or dt < cutoff:
+            continue
+        try:
+            calls = json.loads(fe.get("orig_value") or "[]")
+        except (TypeError, ValueError):
+            continue
+        day = dt.astimezone(timezone.utc).date().isoformat()
+        tid = fe.get("ticket_id")
+        tickets_read.add(tid)
+        for call in calls:
+            model = call.get("model") or "unknown"
+            usd = call.get("usd")
+            ti = call.get("tokens_in") or 0
+            to = call.get("tokens_out") or 0
+            for bucket in (by_day[day], by_model[model]):
+                bucket["tokens_in"] += ti
+                bucket["tokens_out"] += to
+                bucket["reads"] += 1
+                if usd:
+                    bucket["usd"] = round(bucket["usd"] + usd, 6)
+            if usd is None:
+                by_model[model]["priced"] = False
+                unpriced.add(model)
+            if call.get("escalated"):
+                by_model[model]["escalations"] += 1
+                escalated_tickets.add(tid)
+
+    total_usd = round(sum(d["usd"] for d in by_day.values()), 4)
+    n_tickets = len(tickets_read)
+    return {
+        "days": days,
+        "total_usd": total_usd,
+        "tickets": n_tickets,
+        "usd_per_ticket": round(total_usd / n_tickets, 5) if n_tickets else 0.0,
+        "escalated_tickets": len(escalated_tickets),
+        "escalation_rate": (round(len(escalated_tickets) / n_tickets, 3)
+                            if n_tickets else 0.0),
+        # A projection, clearly labelled: the number somebody compares against
+        # a monthly cap. 30 days of the observed daily rate.
+        "projected_month_usd": (round(total_usd / days * 30, 2) if days else 0.0),
+        "by_day": dict(sorted(by_day.items())),
+        "by_model": dict(sorted(by_model.items(),
+                                key=lambda kv: -kv[1]["usd"])),
+        # Named so a total that is missing a model's cost says which one.
+        "unpriced_models": sorted(unpriced),
+    }

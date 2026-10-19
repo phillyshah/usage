@@ -144,12 +144,17 @@ def test_a_run_of_missed_days_is_named_in_the_subject():
 # PHI — the safeguard is the type, not the template
 # --------------------------------------------------------------------------
 def test_daystatus_can_only_hold_counts():
-    """The real guarantee: every field is a date or an int, so there is no
+    """The real guarantee: every field is a date or a NUMBER, so there is no
     field capable of carrying a hospital, a surgeon or a patient's initials.
-    If someone widens this dataclass, this test is the thing that objects."""
+    If someone widens this dataclass, this test is the thing that objects.
+
+    Floats joined ints when the AI spend figures were added — a dollar amount
+    is as incapable of holding a surgeon's name as a count is, so the guarantee
+    is unchanged. What must never appear is a second `str`.
+    """
     kinds = {f.name: f.type for f in fields(DayStatus)}
     assert kinds.pop("day") == "str"                      # the ISO date
-    assert set(kinds.values()) == {"int"}, kinds
+    assert set(kinds.values()) <= {"int", "float"}, kinds
 
 
 def test_no_patient_surgeon_or_hospital_string_reaches_the_email():
