@@ -292,6 +292,15 @@ def escalation_configuration() -> tuple[dict | None, str | None]:
         return None, "OFFLINE_MODE is on"
     if not (settings.anthropic_api_key or "").strip():
         return None, "ANTHROPIC_API_KEY is not set, so there is nothing to escalate to"
+    # Escalating to the model that just read the ticket is paying twice for the
+    # same answer. Easy to arrange by accident: set VISION_PROVIDER=anthropic
+    # with ANTHROPIC_MODEL already equal to the escalation model and every
+    # ticket with a gap is read twice by one model, for nothing.
+    primary, _ = vision_configuration()
+    if primary and primary["provider"] == "anthropic" \
+            and (primary["model"] or "").strip() == model:
+        return None, (f"the primary reader is already {model}, so a second read "
+                      f"would ask the same model the same question")
     return {"provider": "anthropic", "model": model}, None
 
 
