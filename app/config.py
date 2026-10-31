@@ -30,9 +30,15 @@ class Settings(BaseSettings):
     # Empty or "none" turns it off.
     vision_escalate_model: str = "claude-opus-5-5"
     # Which empty cells are worth paying to re-read. A blank Lot or Expiry is
-    # recoverable from the barcode and from the Expiry Log; these four are not
+    # recoverable from the barcode and from the Expiry Log; these are not
     # recoverable from anywhere, and they are what the invoice is built from.
-    vision_escalate_fields: str = "unit_price,surgeon,hospital,surgery_date"
+    #
+    # unit_price was dropped in 2.27.0. Of 251 re-reads between 30 Sep and
+    # 28 Oct, Opus filled the gap in ONE — 229 of them were a missing price and
+    # nothing else, and the price is usually not written on the ticket at all,
+    # so there was nothing for a second reader to find. A missing price now
+    # stays red and goes to a human, which is where those 229 ended up anyway.
+    vision_escalate_fields: str = "surgeon,hospital,surgery_date"
 
     # --- OpenRouter (open-weight models) ---
     openrouter_api_key: str = ""
