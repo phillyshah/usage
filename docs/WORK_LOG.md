@@ -117,6 +117,16 @@ the initials populated in column D.
 
 ## Decisions worth not re-litigating
 
+### The cost estimate prices cache tokens (2.26.1)
+
+Anthropic's `input_tokens` excludes prompt-cache tokens, and the system prompt
+is cached on every Anthropic call, so 2.26.0 under-counted every Opus
+escalation read. Cache writes are priced at 1.25x input and reads at 0.1x
+(0.05x on Opus 5.5). Wider caching was considered and not done: the only
+stable prefix is the system prompt, already cached; the rest of each request
+is the ticket photo, which is different every call and can't be cached. The
+escalation read's cost is Opus output and thinking at `high` effort, not input.
+
 ### Measure where accuracy is lost before spending on improving it
 
 Asked how to dramatically improve accuracy, the honest answer was that nobody
