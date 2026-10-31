@@ -38,9 +38,7 @@ re-litigating, and open threads.
   - `anthropic`: the BAA is load-bearing and covers the main extraction call,
     not just a crop. Since 2.25.0 it is also the **escalation** reader, so a
     ticket with an unfilled cell goes to Claude even when the primary is
-    OpenRouter. Since 2.27.0 escalation triggers only on an empty **surgeon,
-    hospital or surgery_date** — a missing price no longer earns a second read
-    (it filled 1 of 251), so it stays red for human review.
+    OpenRouter.
   - `openrouter`: **no BAA exists.** OpenRouter does not publish one, and it is
     a router, so the request is handed to an upstream provider as well. Andy
     was shown this and approved it on 2026-09-30 to cut cost (~$78/mo → ~$7/mo).

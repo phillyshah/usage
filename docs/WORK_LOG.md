@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-10-31.
+Last updated: 2026-09-30.
 
 ---
 
@@ -16,14 +16,14 @@ Last updated: 2026-10-31.
 
 | | |
 |---|---|
-| Version in `main` | **2.26.1** (PR #55/#56); **2.27.0** on `claude/clever-cerf-oaqc5g` |
+| Version in `main` | **2.21.0** (PR #50); **2.22.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
-| Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**, with Claude Opus as the escalation reader for tickets left with an empty Surgeon/Hospital/Date. **Price came out of that list in 2.27.0** — see below |
+| Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**, with Claude Opus as the escalation reader for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | `claude-sonnet-5-5` from 2.20.0 — **but the VPS `.env` pins `ANTHROPIC_MODEL` and wins**, so the move needs an `.env` edit as well as a pull |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 480 passed, 2 skipped |
+| Tests | 432 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -116,42 +116,6 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
-
-### A missing price does not earn a second read (2.27.0)
-
-The escalation reader was triggered by an empty cell in Price, Surgeon,
-Hospital or Surgery Date. Four weeks of production said Price did not belong
-there.
-
-Between 30 September and 28 October the flags recorded **251** `Re-read by
-claude-opus-5-5` events. **250 of them ended "still empty"** — Opus filled the
-gap exactly once. And **229 of the 251 were a missing unit_price and nothing
-else**: the entire re-read existed to recover one field, and did not recover
-it.
-
-The reason is not a model weakness, which is why no amount of effort or a
-stronger reader would have helped: **most of these prices are not written on
-the ticket at all.** There is nothing on the page to read. A second reader can
-only improve on a cell that has something to find, and an unpriced line is red
-because the information is absent, not because the first reader missed it.
-
-At roughly $0.036 a re-read that was about **$9/month to fill one cell in a
-month**. Price is out of the list as of 2.27.0; a missing price stays red and
-goes to a human, which is exactly where all 229 of those tickets ended up
-anyway — only now without paying Opus first. Expected saving **$8-9/month,
-estimated**, and it will show up in the "What the reading costs" panel rather
-than in another projection from me.
-
-Surgeon, Hospital and Surgery Date keep the re-read. Those genuinely are on the
-ticket somewhere — in the header, on the patient sticker — so a stronger reader
-has something to find, and they are what the invoice is built from.
-
-What would reverse this: prices starting to appear on the tickets. The list is
-a setting (`VISION_ESCALATE_FIELDS`), not a constant, and a test pins that
-putting `unit_price` back restores the behaviour without a code change. Note
-that the **committed default** is what is live — `/root/usage/.env` does not set
-`VISION_ESCALATE_FIELDS`, so unlike `ANTHROPIC_MODEL` this one moves with a
-pull.
 
 ### The cost estimate prices cache tokens (2.26.1)
 
@@ -563,22 +527,6 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
-
-### 2.27.0 — Stop paying Opus to not find a price
-
-One-line change to a default, on four weeks of evidence: 251 re-reads, 250
-still ending empty, 229 of them triggered by a missing price alone. Reasoning
-in **A missing price does not earn a second read** above.
-
-`vision_escalate_fields` drops `unit_price`, leaving
-`surgeon,hospital,surgery_date`. `escalate_fields()` and `_unresolved_fields()`
-were not touched — they already read the setting, which is the whole reason this
-was a default change rather than a rewrite.
-
-Two tests in `test_escalation.py` had been using a price-only gap as their
-trigger and were switched to a surgeon gap; left alone they would have passed
-vacuously, testing nothing, which is the failure mode worth watching for when a
-trigger narrows.
 
 ### 2.22.0 — Two things volume was going to break
 
