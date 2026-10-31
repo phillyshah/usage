@@ -13,6 +13,12 @@ re-sending the image, so the unit is the ticket.
 The trigger is RED, not amber. Amber means the tool has a candidate and a human
 confirms it, which is already cheap. Red means nobody has anything — the only
 state a second reader can improve on.
+
+And red in one of THREE fields, since 2.27.0: surgeon, hospital, surgery_date.
+unit_price was in that list for a month and the numbers killed it — 251
+re-reads, 250 of which still ended with an empty cell, 229 of which were a
+missing price and nothing else. Red means a second reader MIGHT help; a price
+nobody wrote down is red for a reason no model can fix.
 """
 from unittest.mock import MagicMock, patch
 
@@ -41,9 +47,14 @@ def _read(surgeon=None, hospital=None, date=None, price=None, ref="ESC-REF-1"):
 # ---------------------------------------------------------------------------
 def test_the_fields_worth_escalating_are_the_ones_nothing_else_can_recover():
     """A blank Lot or Expiry comes back from the barcode or the Expiry Log.
-    These four come from nowhere else, and the invoice is built from them."""
-    assert vision.escalate_fields() == {
-        "unit_price", "surgeon", "hospital", "surgery_date"}
+    These three come from nowhere else, and the invoice is built from them.
+
+    unit_price was in this set until 2.27.0 and was taken out on the evidence:
+    251 re-reads in four weeks, 250 of which still ended with an empty cell,
+    and 229 of which were a missing price and nothing else. A price that is not
+    written on the ticket cannot be read off it by a second model.
+    """
+    assert vision.escalate_fields() == {"surgeon", "hospital", "surgery_date"}
 
 
 def test_escalation_is_off_when_no_model_is_configured():
@@ -142,10 +153,45 @@ def test_a_ticket_with_everything_filled_is_not_escalated():
     assert "escalated_to" not in summary
 
 
-def test_a_ticket_with_an_unread_price_is_escalated():
+def test_a_ticket_missing_only_a_price_is_not_re_read():
+    """The common case, and the one that was costing ~$9/month for nothing:
+    229 of 251 re-reads were a missing price and nothing else. The price stays
+    red and a human fills it in — which is where those tickets ended up anyway,
+    only after paying Opus first."""
+    from app.pipeline import assemble
+
     summary, calls = _run(
         _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=None),
         _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=1300))
+    assert calls == ["primary"]
+    assert "escalated_to" not in summary
+
+    cmap = assemble.confidence_map_for_ticket(summary["ticket_id"])
+    per_line = list((cmap.get("lines") or {}).values())
+    assert per_line, "the line itself must survive — only the re-read is dropped"
+    assert per_line[0]["unit_price"] == "low", "a missing price must still be red"
+
+
+def test_a_ticket_missing_a_surgeon_is_still_re_read():
+    """Dropping unit_price must not quietly disable escalation altogether. A
+    surgeon is on the ticket somewhere, so a second read has something to find."""
+    summary, calls = _run(
+        _read(surgeon=None, hospital="Enloe", date="2026-09-28", price=1300),
+        _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=1300))
+    assert calls == ["primary", "escalated"]
+    assert summary["escalated_to"] == "claude-opus-5-5"
+
+
+def test_the_field_list_can_still_be_widened():
+    """The set is a setting, not a constant. If prices ever start being written
+    on these tickets, VISION_ESCALATE_FIELDS puts the re-read back without a
+    code change."""
+    with patch.object(vision.settings, "vision_escalate_fields",
+                      "unit_price,surgeon,hospital,surgery_date"):
+        assert "unit_price" in vision.escalate_fields()
+        summary, calls = _run(
+            _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=None),
+            _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=1300))
     assert calls == ["primary", "escalated"]
     assert summary["escalated_to"] == "claude-opus-5-5"
 
@@ -178,7 +224,7 @@ def test_a_gap_the_second_read_also_misses_is_reported_not_hidden():
 def test_a_failed_second_read_leaves_the_first_one_standing():
     """An escalation that errors must not destroy a usable primary read."""
     summary, calls = _run(
-        _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=None),
+        _read(surgeon="Konkin", hospital=None, date="2026-09-28", price=1300),
         {"header": {}, "lines": [], "freight": _f(None, "low"),
          "grand_total": _f(None, "low"), "error": "APIStatusError: 500"})
     assert calls == ["primary", "escalated"]
@@ -187,7 +233,7 @@ def test_a_failed_second_read_leaves_the_first_one_standing():
 
 def test_nothing_is_escalated_when_escalation_is_unavailable():
     summary, calls = _run(
-        _read(surgeon="Konkin", hospital="Enloe", date="2026-09-28", price=None),
+        _read(surgeon=None, hospital="Enloe", date="2026-09-28", price=1300),
         None, escalate_model=None)
     assert calls == ["primary"]
 

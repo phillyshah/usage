@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.26.1"
+VERSION = "2.27.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.27.0",
+        "date": "2026-10-31",
+        "notes": [
+            "A ticket whose only gap is a price is no longer re-read by "
+            "Claude. That re-read almost never found one — of 251 re-reads "
+            "over the last month it filled the gap once, because a price "
+            "that was never written on the ticket cannot be read off it. The "
+            "price stays red for you to fill in, which is where those "
+            "tickets were ending up anyway",
+            "A missing surgeon, hospital or surgery date still gets the "
+            "second read. Those are on the ticket somewhere, so a stronger "
+            "reader has something to find",
+            "Expected to take roughly $8-9 a month off the AI bill. Watch "
+            "the 'What the reading costs' panel in History",
+        ],
+    },
     {
         "version": "2.26.1",
         "date": "2026-10-31",
