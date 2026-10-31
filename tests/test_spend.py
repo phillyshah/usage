@@ -67,6 +67,26 @@ def test_missing_token_counts_are_not_guessed_at():
     assert vision.estimate_cost("claude-opus-5-5", None, None) is None
 
 
+def test_cached_prompt_tokens_are_billed():
+    """input_tokens excludes the cached system prompt, so leaving cache tokens
+    out understated every Anthropic read."""
+    plain = vision.estimate_cost("claude-opus-5-5", 1_000, 500)
+    assert vision.estimate_cost("claude-opus-5-5", 1_000, 500,
+                                cache_write=2_000) > plain
+    assert vision.estimate_cost("claude-opus-5-5", 1_000, 500,
+                                cache_read=2_000) > plain
+
+
+def test_cache_reads_use_the_model_rate():
+    # Opus 5.5 reads at 0.05x of $4/M; Sonnet 5.5 at 0.1x of $2/M.
+    assert vision.estimate_cost("claude-opus-5-5", 0, 0,
+                                cache_read=1_000_000) == 0.20
+    assert vision.estimate_cost("claude-sonnet-5-5", 0, 0,
+                                cache_read=1_000_000) == 0.20
+    assert vision.estimate_cost("claude-opus-5-5", 0, 0,
+                                cache_write=1_000_000) == 5.00
+
+
 # ---------------------------------------------------------------------------
 # Recording, without a migration
 # ---------------------------------------------------------------------------
