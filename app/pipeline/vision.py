@@ -28,7 +28,7 @@ import json
 import logging
 
 from app.config import settings
-from app.pipeline import transient
+from app.pipeline import modelnames, transient
 
 log = logging.getLogger("pipeline.vision")
 
@@ -63,8 +63,13 @@ MODEL_PRICES = {
     "qwen/qwen3-vl-235b-a22b-instruct": (0.20, 0.88),
     "qwen/qwen3-vl-32b-instruct": (0.104, 0.416),
     "claude-opus-5-5": (4.00, 20.00),
+    "claude-opus-5": (5.00, 25.00),
     "claude-sonnet-5-5": (2.00, 10.00),
     "claude-sonnet-5": (2.00, 10.00),
+    # $0.10/$0.50 up to a 100K-token prompt, $0.50/$2.50 above it. One ticket
+    # photo plus this prompt is nowhere near 100K, so the lower tier is the
+    # one that applies here.
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-haiku-4-5": (1.00, 5.00),
 }
 
@@ -149,7 +154,11 @@ def vision_configuration() -> tuple[dict | None, str | None]:
         return None, "ANTHROPIC_API_KEY is not set on the server."
     return {
         "provider": "anthropic",
-        "model": settings.anthropic_model,
+        # ANTHROPIC_MODEL may name a family; what travels from here on is
+        # always the concrete id, so everything downstream — the request, the
+        # trace, the price lookup — sees one unambiguous name.
+        "model": modelnames.resolve(settings.anthropic_model),
+        "spec": (settings.anthropic_model or "").strip(),
         "key_variable": "ANTHROPIC_API_KEY",
         "model_variable": "ANTHROPIC_MODEL",
     }, None
@@ -323,31 +332,67 @@ def _parse(text: str, stop_reason: str | None = None) -> dict:
         return _empty(error=f"unparseable response: {e}")
 
 
-def escalation_configuration() -> tuple[dict | None, str | None]:
-    """The stronger second reader, or why there isn't one.
+def _escalate_specs() -> list[str]:
+    """The rungs as configured, before any of them is resolved or filtered.
 
-    Claude re-reads only the tickets the primary left with a real gap, so the
-    bill scales with the failure rate rather than with volume. At around a tenth
-    of tickets escalating this is cheaper than reading everything with Claude
-    and more accurate than reading everything with the open-weight model.
+    VISION_ESCALATE_MODEL (singular) still wins when it is set, so a .env that
+    pins one reader keeps behaving exactly as it did.
     """
-    model = (settings.vision_escalate_model or "").strip()
-    if not model or model.lower() == "none":
-        return None, "escalation is turned off (VISION_ESCALATE_MODEL)"
+    one = (settings.vision_escalate_model or "").strip()
+    raw = one or (settings.vision_escalate_models or "")
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+def escalation_ladder() -> tuple[list[dict], str | None]:
+    """The stronger readers in order, or why there are none.
+
+    A ladder rather than one reader, because the two questions have different
+    prices. Sonnet costs half what Opus does; most of what the open-weight
+    model misses, Sonnet can read. Opus is then paid only for the cells that
+    survived both — which is the smallest set anyone has reason to pay Opus for.
+
+    Each rung's model may be a family name; `modelnames.resolve` turns that into
+    whatever is current today.
+    """
+    specs = _escalate_specs()
+    if not specs or [s.lower() for s in specs] == ["none"]:
+        return [], "escalation is turned off (VISION_ESCALATE_MODELS)"
     if settings.offline_mode:
-        return None, "OFFLINE_MODE is on"
+        return [], "OFFLINE_MODE is on"
     if not (settings.anthropic_api_key or "").strip():
-        return None, "ANTHROPIC_API_KEY is not set, so there is nothing to escalate to"
-    # Escalating to the model that just read the ticket is paying twice for the
-    # same answer. Easy to arrange by accident: set VISION_PROVIDER=anthropic
-    # with ANTHROPIC_MODEL already equal to the escalation model and every
-    # ticket with a gap is read twice by one model, for nothing.
+        return [], "ANTHROPIC_API_KEY is not set, so there is nothing to escalate to"
+
+    # Re-reading with the model that just read the ticket is paying twice for
+    # one answer. Easy to arrange by accident: VISION_PROVIDER=anthropic with
+    # ANTHROPIC_MODEL already equal to a rung. Such a rung is dropped and the
+    # REST of the ladder still runs — an escalation to Opus should not be lost
+    # because the Sonnet rung happened to duplicate the primary.
     primary, _ = vision_configuration()
-    if primary and primary["provider"] == "anthropic" \
-            and (primary["model"] or "").strip() == model:
-        return None, (f"the primary reader is already {model}, so a second read "
-                      f"would ask the same model the same question")
-    return {"provider": "anthropic", "model": model}, None
+    already = set()
+    if primary and primary["provider"] == "anthropic":
+        already.add((primary["model"] or "").strip())
+
+    ladder, dropped = [], []
+    for spec in specs:
+        if spec.lower() == "none":
+            continue
+        model = modelnames.resolve(spec)
+        if not model or model in already:
+            dropped.append(model or spec)
+            continue
+        already.add(model)
+        ladder.append({"provider": "anthropic", "model": model, "spec": spec})
+    if not ladder:
+        return [], ("every configured second reader is the same model that "
+                    f"already read the ticket ({', '.join(dropped)}), so a "
+                    "second read would ask the same model the same question")
+    return ladder, None
+
+
+def escalation_configuration() -> tuple[dict | None, str | None]:
+    """The first rung of the ladder, or why there isn't one."""
+    ladder, why = escalation_ladder()
+    return (ladder[0], None) if ladder else (None, why)
 
 
 def escalate_fields() -> set[str]:
@@ -420,7 +465,7 @@ def _request_params(model: str | None = None) -> dict:
     invisible until a batch failed.
     """
     return {
-        "model": model or settings.anthropic_model,
+        "model": model or modelnames.resolve(settings.anthropic_model),
         # Adaptive is the ONLY on-mode for this model family. A fixed
         # `{"type": "enabled", "budget_tokens": N}` budget is rejected with a
         # 400 — that shipped once and every call failed for a whole release.
@@ -497,6 +542,9 @@ def _call_anthropic(img: bytes, media_type: str, probe: bool = False,
         "tokens_out": getattr(u, "output_tokens", None),
         "cache_read": getattr(u, "cache_read_input_tokens", None),
         "cache_write": getattr(u, "cache_creation_input_tokens", None),
+        # Which model actually answered. It matters more now that a setting can
+        # name a family: the bill is for what ran, not for what we asked for.
+        "served_by": getattr(resp, "model", None),
     }
 
 
@@ -520,7 +568,7 @@ def _call_openrouter(img: bytes, media_type: str, probe: bool = False,
             "image_url": {"url": f"data:{media_type};base64,{_b64(img)}"},
         })
     resp = client.chat.completions.create(
-        model=model or settings.openrouter_model,
+        model=model or modelnames.resolve(settings.openrouter_model),
         max_tokens=1024 if probe else 16000,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -574,22 +622,54 @@ def check_connection() -> dict:
         return {"ok": False, "model": None, "error": reason}
     try:
         _TRANSPORTS[cfg["provider"]](b"", "image/jpeg", probe=True)
-        return {"ok": True, "model": cfg["model"], "error": None,
-                "provider": cfg["provider"]}
+        out = {"ok": True, "model": cfg["model"], "error": None,
+               "provider": cfg["provider"]}
     except Exception as e:
         log.error("vision connection check failed: %s", e)
         return {"ok": False, "model": cfg["model"],
                 "provider": cfg["provider"], "error": f"{type(e).__name__}: {e}"}
 
+    # The second readers get probed too, and this is why: a rung may name a
+    # FAMILY, so which model answers it is decided at run time and can change
+    # without anyone editing a setting. If a newly released model rejects a
+    # parameter this app sends, the only alternative to finding out here is
+    # finding out when a ticket escalates in the middle of a batch.
+    #
+    # Deliberately NOT part of `ok`: escalation is an improvement on the
+    # primary read, so a broken rung must not stop a batch that can still be
+    # read. run_batch gates on `ok` alone.
+    out["escalation"] = _probe_ladder()
+    return out
+
+
+def _probe_ladder() -> list[dict]:
+    ladder, why = escalation_ladder()
+    if not ladder:
+        return [{"model": None, "ok": False, "error": why}] if why else []
+    checked = []
+    for rung in ladder:
+        try:
+            _TRANSPORTS[rung["provider"]](b"", "image/jpeg", probe=True,
+                                          model=rung["model"])
+            checked.append({"model": rung["model"], "spec": rung["spec"],
+                            "ok": True, "error": None})
+        except Exception as e:
+            log.error("second reader %s is unreachable: %s", rung["model"], e)
+            checked.append({"model": rung["model"], "spec": rung["spec"],
+                            "ok": False, "error": f"{type(e).__name__}: {e}"})
+    return checked
+
 
 def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg",
-                        escalate: bool = False) -> dict:
+                        escalate: bool | dict = False) -> dict:
     """One call to the configured reader. Returns the per-field result.
 
-    ``escalate`` sends the ticket to the stronger second reader instead of the
-    primary. Everything else about the call — the prompt, the parsing, the
-    error marker, the trace — is identical, because a second reader that
-    reported its failures differently would be a second thing to keep right.
+    ``escalate`` sends the ticket to a stronger reader instead of the primary:
+    ``True`` for the first rung of the ladder, or a rung dict from
+    ``escalation_ladder()`` to name which one. Everything else about the call —
+    the prompt, the parsing, the error marker, the trace — is identical,
+    because a second reader that reported its failures differently would be a
+    second thing to keep right.
 
     Always a well-formed result, so downstream code is uniform whether or not a
     reader is configured — but a result that came back empty because something
@@ -599,8 +679,12 @@ def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg",
     """
     from app.pipeline import tracer
 
-    cfg, reason = (escalation_configuration() if escalate
-                   else vision_configuration())
+    if isinstance(escalate, dict):
+        cfg, reason = escalate, None
+    elif escalate:
+        cfg, reason = escalation_configuration()
+    else:
+        cfg, reason = vision_configuration()
     if cfg is None:
         # OFFLINE_MODE is a deliberate choice — the deterministic path is the
         # whole point of it, so it is not an error. A missing key in a live

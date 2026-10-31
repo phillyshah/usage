@@ -5,24 +5,34 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.27.0"
+VERSION = "2.28.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.28.0",
+        "date": "2026-10-31",
+        "notes": [
+            "A ticket with an empty cell now goes to Sonnet first, and only "
+            "on to Opus for whatever Sonnet also couldn't read. Sonnet costs "
+            "half what Opus does, so the expensive reader is now the "
+            "exception rather than the first thing tried — without giving up "
+            "a second look at anything",
+            "Reverses 2.27.0, which stopped re-reading a missing price "
+            "altogether. A cheaper second reader was the better answer: a "
+            "price that IS written on the ticket still gets another look",
+            "The app now follows the newest Sonnet and Opus by itself. The "
+            "model version is no longer written into the settings, so a new "
+            "release is picked up without an edit — and 'Test AI connection' "
+            "names the readers a batch would actually use",
+        ],
+    },
     {
         "version": "2.27.0",
         "date": "2026-10-31",
         "notes": [
-            "A ticket whose only gap is a price is no longer re-read by "
-            "Claude. That re-read almost never found one — of 251 re-reads "
-            "over the last month it filled the gap once, because a price "
-            "that was never written on the ticket cannot be read off it. The "
-            "price stays red for you to fill in, which is where those "
-            "tickets were ending up anyway",
-            "A missing surgeon, hospital or surgery date still gets the "
-            "second read. Those are on the ticket somewhere, so a stronger "
-            "reader has something to find",
-            "Expected to take roughly $8-9 a month off the AI bill. Watch "
-            "the 'What the reading costs' panel in History",
+            "Reversed the same day by 2.28.0, and listed here only so the "
+            "record is straight: this stopped a missing price from being "
+            "re-read at all. The cost was real but the fix was too blunt",
         ],
     },
     {

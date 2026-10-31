@@ -194,7 +194,10 @@ def test_check_connection_sends_the_same_parameters_as_a_real_extraction():
     client = _client(text="ok")
     with _live(client):
         vision.check_connection()
-    probe = client.messages.create.call_args.kwargs
+    # The FIRST call: since 2.28.0 the preflight also probes each second
+    # reader, so the last call is a rung, not the primary. It is the primary
+    # probe that has to match the primary extraction.
+    probe = client.messages.create.call_args_list[0].kwargs
 
     real = _client(text='{"header": {}, "lines": [], "freight": null, "grand_total": null}')
     with _live(real):
