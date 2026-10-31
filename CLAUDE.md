@@ -38,7 +38,9 @@ re-litigating, and open threads.
   - `anthropic`: the BAA is load-bearing and covers the main extraction call,
     not just a crop. Since 2.25.0 it is also the **escalation** reader, so a
     ticket with an unfilled cell goes to Claude even when the primary is
-    OpenRouter.
+    OpenRouter. Since 2.28.0 that is a **ladder** — `VISION_ESCALATE_MODELS`,
+    Sonnet then Opus, each rung only if the one before left a cell red — so an
+    escalated ticket may be sent to Anthropic twice.
   - `openrouter`: **no BAA exists.** OpenRouter does not publish one, and it is
     a router, so the request is handed to an upstream provider as well. Andy
     was shown this and approved it on 2026-09-30 to cut cost (~$78/mo → ~$7/mo).
@@ -49,6 +51,18 @@ re-litigating, and open threads.
     touch — it has to be turned off in their console.
   - Re-masking is the standing alternative if that posture ever changes; the
     old geometry is in git history at `app/pipeline/redact.py` (removed 2.19.0).
+- **Model names are family names, not versions (2.28.0).** `ANTHROPIC_MODEL`
+  and the `VISION_ESCALATE_MODELS` rungs may say `sonnet` / `opus` / `haiku`,
+  and `app/pipeline/modelnames.py` asks the Models API which model in that
+  family is current (24h cache, `image_input` required, pinned fallback on any
+  failure — a name lookup must never stop a batch). An exact id is still
+  honoured as a deliberate pin, which is how the OpenRouter `vendor/model` ids
+  pass through. **OpenRouter is deliberately not resolved this way:** no
+  version ordering, and image support varies, so "the newest qwen" could be a
+  model that cannot see a ticket.
+  - The VPS `.env` currently pins `ANTHROPIC_MODEL=claude-sonnet-5-5`. That
+    still wins over the code, so it stays on that exact model until the line is
+    changed to `ANTHROPIC_MODEL=sonnet`.
 - **`EXTRACT_PATIENT_INITIALS`** (currently **on** in prod) decides whether the
   patient's two initials are **kept**, not whether they are read — the model
   sees the sticker either way. Off means `assemble.py` discards them and nothing

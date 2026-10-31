@@ -21,17 +21,33 @@ class Settings(BaseSettings):
     # on the other account is what stopped a day's work once already.
     vision_provider: str = "openrouter"
 
-    # The stronger second reader, used ONLY on tickets the first one left with
-    # a genuine gap — see VISION_ESCALATE_FIELDS. Cost therefore scales with
-    # the failure rate rather than with volume: at ~10% of tickets this is
-    # cheaper than reading everything with Claude AND more accurate than
-    # reading everything with the open-weight model.
+    # The stronger readers, used ONLY on tickets the previous one left with a
+    # genuine gap — see VISION_ESCALATE_FIELDS. Cost therefore scales with the
+    # failure rate rather than with volume: at ~10% of tickets this is cheaper
+    # than reading everything with Claude AND more accurate than reading
+    # everything with the open-weight model.
     #
-    # Empty or "none" turns it off.
-    vision_escalate_model: str = "claude-opus-5-5"
+    # A LADDER, tried in order, each rung only if the one before it left a cell
+    # still empty. Sonnet first because it costs half what Opus does and the
+    # gaps it cannot fill are the only ones worth Opus money.
+    #
+    # A rung may name a FAMILY — "sonnet", "opus", "haiku" — and the newest
+    # model in it is looked up at run time (app/pipeline/modelnames.py). An
+    # exact id such as "claude-opus-5-5" is honoured as a deliberate pin.
+    # Empty or "none" turns escalation off.
+    vision_escalate_models: str = "sonnet,opus"
+    # The old single-reader setting. Still read, so a .env that pins it keeps
+    # working; when set it becomes the whole ladder.
+    vision_escalate_model: str = ""
     # Which empty cells are worth paying to re-read. A blank Lot or Expiry is
     # recoverable from the barcode and from the Expiry Log; these four are not
     # recoverable from anywhere, and they are what the invoice is built from.
+    #
+    # unit_price is in this list on the evidence of four weeks of production AND
+    # against it: of 251 Opus re-reads, 250 still ended with an empty cell and
+    # 229 were a missing price alone. Dropping it was tried (2.27.0) and
+    # reversed — the answer taken instead was a cheaper first re-read, so a
+    # price that IS on the ticket still gets a second look.
     vision_escalate_fields: str = "unit_price,surgeon,hospital,surgery_date"
 
     # --- OpenRouter (open-weight models) ---
@@ -50,9 +66,11 @@ class Settings(BaseSettings):
 
     # --- Anthropic (vision fallback) ---
     anthropic_api_key: str = ""
-    # The current Sonnet. NOTE: the VPS .env sets ANTHROPIC_MODEL, and that
-    # pin wins over this default — changing it here alone moves nothing.
-    anthropic_model: str = "claude-sonnet-5-5"
+    # May be a family name ("sonnet", "opus", "haiku"), resolved to the newest
+    # model in it at run time, or an exact id as a deliberate pin.
+    # NOTE: the VPS .env sets ANTHROPIC_MODEL, and that pin wins over this
+    # default — changing it here alone moves nothing.
+    anthropic_model: str = "sonnet"
 
     # --- Supabase (Postgres + Storage) ---
     supabase_url: str = ""

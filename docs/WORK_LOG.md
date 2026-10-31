@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-09-30.
+Last updated: 2026-10-31.
 
 ---
 
@@ -16,14 +16,14 @@ Last updated: 2026-09-30.
 
 | | |
 |---|---|
-| Version in `main` | **2.21.0** (PR #50); **2.22.0** on `claude/clever-cerf-oaqc5g`, not yet merged |
+| Version in `main` | **2.26.1** (PR #55/#56); **2.28.0** on `claude/clever-cerf-oaqc5g` (2.27.0 was merged and reversed the same day) |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
-| Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**, with Claude Opus as the escalation reader for tickets left with an empty Price/Surgeon/Hospital/Date |
-| Model | `claude-sonnet-5-5` from 2.20.0 — **but the VPS `.env` pins `ANTHROPIC_MODEL` and wins**, so the move needs an `.env` edit as well as a pull |
+| Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
+| Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 432 passed, 2 skipped |
+| Tests | 494 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -116,6 +116,71 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### A ladder, not one second reader — and the 2.27.0 reversal (2.28.0)
+
+Four weeks of production on the single-Opus escalation: between 30 September
+and 28 October the flags recorded **251** `Re-read by claude-opus-5-5` events,
+**250 of which still ended "still empty"**, and **229 of which were a missing
+`unit_price` and nothing else**. At ~$0.036 a re-read that is ~$9/month, and
+Opus filled the gap exactly once.
+
+**2.27.0 drew the wrong conclusion from that number** and dropped `unit_price`
+from `VISION_ESCALATE_FIELDS` — no re-read at all when a price was the only
+gap. It was merged and reversed the same day, on Andy's call, and the reversal
+is the better reading of the same data:
+
+* Most of those prices are not written on the ticket, so no reader can recover
+  them. That part of the diagnosis was right.
+* But *some* are, and removing the field gives those up permanently. The cost
+  was never the re-read existing; it was the re-read being **Opus**.
+
+So the second reader is now a **ladder**: Sonnet, then Opus only for what
+Sonnet also could not read. Sonnet is $2/$10 against Opus's $4/$20 — half, on
+both input and output — so the common case (a gap Sonnet can read, or a gap
+nothing can read) costs half what it did, and Opus is paid only for the
+smallest set of cells anyone has had a reason to pay Opus for. Expected around
+**$4-5/month against $9, estimated**, with a second look kept on every field.
+
+The all-or-nothing same-model guard from 2.25.1 is now per-rung: a Sonnet
+primary drops the Sonnet rung and **keeps** the Opus one. Refusing the whole
+escalation there was over-broad.
+
+### Model names follow the family, not a version (2.28.0)
+
+`claude-opus-5-5` reads like a floating name and is a pin. When the next Opus
+ships, a setting that says `claude-opus-5-5` keeps calling the old one and
+nothing in the app says so. **Anthropic publishes no `-latest` alias** — the
+ids in their catalogue *are* the aliases — so the resolution has to be done
+here: `app/pipeline/modelnames.py` takes `sonnet` / `opus` / `haiku` and asks
+the Models API which model in that family is current.
+
+Three constraints, each from something that has already gone wrong on this app:
+
+* **It never fails a batch.** Any problem reaching the Models API falls back to
+  a pinned id and logs why. Losing a day's work to a *name lookup* would be a
+  new and stupid failure mode.
+* **It requires `image_input`.** The newest model in a family need not accept a
+  photograph, and picking a text-only one would fail every ticket — the newest
+  thing in the family doing it.
+* **It is cached for 24h.** Not per ticket; and a container up for a month
+  still notices a new release.
+
+An exact id in a setting is still honoured as a deliberate pin, which is also
+how the OpenRouter ids (`vendor/model`) pass through untouched.
+
+**OpenRouter is deliberately NOT resolved this way.** Its catalogue is a router
+with no version ordering, and which models accept images varies — auto-picking
+"the newest qwen" could quietly install a model that cannot see a ticket. That
+one stays pinned.
+
+Because a family name means the model can change without anyone editing a
+setting, `check_connection()` now probes **each rung** as well as the primary,
+and the "Test AI connection" card names them. A rung that fails does **not**
+fail the preflight: escalation improves on the primary read, so a batch that
+can still be read is not stopped. And the cost estimate now prices what the API
+says it **served** (`resp.model`), not what was asked for — otherwise a
+resolved model would be an unpriced one.
 
 ### The cost estimate prices cache tokens (2.26.1)
 
@@ -527,6 +592,33 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.28.0 — Sonnet first, Opus for the remainder; model names that don't go stale
+
+Reasoning in **A ladder, not one second reader** and **Model names follow the
+family** above. Shape of the change:
+
+* `VISION_ESCALATE_MODELS=sonnet,opus` replaces `VISION_ESCALATE_MODEL`, which
+  is still read (and when set becomes the whole ladder) so a pinned `.env`
+  keeps working.
+* `vision.escalation_ladder()` returns the rungs; `escalation_configuration()`
+  is now "the first rung" and kept for its callers.
+* `run.process_ticket` walks the rungs, re-checking `_unresolved_fields()`
+  after each, and **stops the moment nothing is red** — a rung that is not
+  needed is not paid for. A rung that errors is logged and the ladder
+  continues: the read standing so far is untouched and the ticket keeps its
+  remaining chance at the gap.
+* Each rung writes its own flag, so "which model produced this value" has an
+  answer now that there are two possible re-readers.
+* `extract_handwritten(escalate=...)` takes a rung dict as well as a bool.
+
+Reverted along the way: 2.27.0's removal of `unit_price`.
+
+One test needed a real correction rather than an update:
+`test_check_connection_sends_the_same_parameters_as_a_real_extraction` read
+`call_args` (the last call) and the preflight now probes the rungs after the
+primary, so it was comparing a rung's parameters against the primary
+extraction's. It reads `call_args_list[0]` now.
 
 ### 2.22.0 — Two things volume was going to break
 

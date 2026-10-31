@@ -5,9 +5,36 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.26.1"
+VERSION = "2.28.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.28.0",
+        "date": "2026-10-31",
+        "notes": [
+            "A ticket with an empty cell now goes to Sonnet first, and only "
+            "on to Opus for whatever Sonnet also couldn't read. Sonnet costs "
+            "half what Opus does, so the expensive reader is now the "
+            "exception rather than the first thing tried — without giving up "
+            "a second look at anything",
+            "Reverses 2.27.0, which stopped re-reading a missing price "
+            "altogether. A cheaper second reader was the better answer: a "
+            "price that IS written on the ticket still gets another look",
+            "The app now follows the newest Sonnet and Opus by itself. The "
+            "model version is no longer written into the settings, so a new "
+            "release is picked up without an edit — and 'Test AI connection' "
+            "names the readers a batch would actually use",
+        ],
+    },
+    {
+        "version": "2.27.0",
+        "date": "2026-10-31",
+        "notes": [
+            "Reversed the same day by 2.28.0, and listed here only so the "
+            "record is straight: this stopped a missing price from being "
+            "re-read at all. The cost was real but the fix was too blunt",
+        ],
+    },
     {
         "version": "2.26.1",
         "date": "2026-10-31",

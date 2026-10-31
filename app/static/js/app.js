@@ -372,9 +372,21 @@ visionCheckBtn.addEventListener("click", async () => {
   try {
     const data = await api.visionHealth();
     if (data && data.ok) {
-      renderNotice(visionCheckResult, "success", "The AI reader is working",
-        [el("p", { class: "notice-text",
-          text: data.detail || `Answering as ${data.model || "the configured model"}. Go ahead and extract.` })]);
+      const lines = [el("p", { class: "notice-text",
+        text: data.detail || `Answering as ${data.model || "the configured model"}. Go ahead and extract.` })];
+      // The second readers, named. Their model names are decided at run time
+      // (a setting may say "sonnet" rather than a version), so this check is
+      // the only place anyone can see which ones a batch would actually use.
+      const rungs = (data.escalation || []).filter((r) => r.model);
+      if (rungs.length) {
+        const broken = rungs.filter((r) => !r.ok);
+        lines.push(el("p", { class: "notice-text", text:
+          broken.length
+            ? `Second reader unavailable: ${broken.map((r) => r.model).join(", ")}. Tickets will still be read, but a cell the first reader misses won't get a second look.`
+            : `Second readers ready, in order: ${rungs.map((r) => r.model).join(" → ")}. Only tickets with an empty cell are sent to them.`,
+        }));
+      }
+      renderNotice(visionCheckResult, "success", "The AI reader is working", lines);
     } else {
       // The raw error goes in renderNotice's technical-detail block, which is
       // collapsible and copyable — it is the string that actually diagnoses it.

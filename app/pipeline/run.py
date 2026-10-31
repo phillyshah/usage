@@ -166,27 +166,43 @@ def process_ticket(ticket: dict) -> dict:
     # themselves.
     gaps = _unresolved_fields(summary["ticket_id"])
     if gaps:
-        cfg, why = vision.escalation_configuration()
-        if cfg is None:
+        ladder, why = vision.escalation_ladder()
+        if not ladder:
             log.info("ticket %s has gaps in %s but escalation is unavailable: %s",
                      ticket_id, sorted(gaps), why)
-        else:
+        # The rungs in order, each one paid for ONLY if the one before it left a
+        # cell still empty. Sonnet costs half what Opus does and reads most of
+        # what the open-weight model missed; Opus is then asked about the
+        # smallest set of cells anyone has reason to ask Opus about.
+        read, notes = vresult, []
+        for rung in ladder:
+            if not gaps:
+                break
             log.info("ticket %s: re-reading with %s because %s came back empty",
-                     ticket_id, cfg["model"], sorted(gaps))
-            second = vision.extract_handwritten(vision_bytes, escalate=True)
+                     ticket_id, rung["model"], sorted(gaps))
+            second = vision.extract_handwritten(vision_bytes, escalate=rung)
             if second.get("error"):
-                log.warning("second read failed for %s: %s", ticket_id, second["error"])
-            else:
-                merged = vision.merge_reads(vresult, second)
-                summary = assemble.assemble_and_persist(ticket, merged, labels)
-                still = _unresolved_fields(summary["ticket_id"])
-                db.update_ticket(ticket_id, {"flags": (summary.get("flags") or []) + [
-                    f"Re-read by {cfg['model']} because "
-                    f"{', '.join(sorted(gaps))} came back empty"
-                    + (f"; {', '.join(sorted(still))} still empty" if still
-                       else " — it filled them in")
-                ]})
-                summary["escalated_to"] = cfg["model"]
+                # The rung failed, not the ticket. Carry on down the ladder:
+                # the next reader is a different model on a different request,
+                # and the read standing so far is untouched.
+                log.warning("second read by %s failed for %s: %s",
+                            rung["model"], ticket_id, second["error"])
+                notes.append(f"Re-read by {rung['model']} failed: {second['error']}")
+                continue
+            read = vision.merge_reads(read, second)
+            summary = assemble.assemble_and_persist(ticket, read, labels)
+            asked, gaps = gaps, _unresolved_fields(summary["ticket_id"])
+            filled = asked - gaps
+            notes.append(
+                f"Re-read by {rung['model']} because "
+                f"{', '.join(sorted(asked))} came back empty"
+                + (f"; filled {', '.join(sorted(filled))}" if filled else "")
+                + (f"; {', '.join(sorted(gaps))} still empty" if gaps
+                   else " — it filled them in"))
+            summary["escalated_to"] = rung["model"]
+        if notes:
+            db.update_ticket(ticket_id,
+                             {"flags": (summary.get("flags") or []) + notes})
     return summary
 
 
