@@ -5,9 +5,19 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.26.0"
+VERSION = "2.26.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.26.1",
+        "date": "2026-10-31",
+        "notes": [
+            "The cost panel now counts the cached part of the instructions "
+            "on the second, more expensive read. Those tokens are billed "
+            "separately and were being left out, so escalated tickets looked "
+            "cheaper than they were",
+        ],
+    },
     {
         "version": "2.26.0",
         "date": "2026-10-19",

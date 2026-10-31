@@ -69,16 +69,32 @@ MODEL_PRICES = {
 }
 
 
-def estimate_cost(model: str | None, tokens_in, tokens_out) -> float | None:
+# Prompt-cache multipliers on the input price. Anthropic bills cached prompt
+# tokens apart from input_tokens (which EXCLUDES them): a 5-minute cache write
+# costs 1.25x, a cache read 0.1x — 0.05x on Opus 5.5. Leaving them out made
+# every escalated read look cheaper than it was, because the system prompt is
+# cached on every Anthropic call.
+CACHE_WRITE_MULT = 1.25
+CACHE_READ_MULT = {"claude-opus-5-5": 0.05}
+CACHE_READ_MULT_DEFAULT = 0.10
+
+
+def estimate_cost(model: str | None, tokens_in, tokens_out,
+                  cache_read=None, cache_write=None) -> float | None:
     """Dollars for one call, or None when we cannot say honestly.
 
     None rather than 0.0: a zero would quietly understate a bill, and the whole
     point of this is to stop a spend cap arriving as a surprise.
     """
-    price = MODEL_PRICES.get((model or "").strip())
+    name = (model or "").strip()
+    price = MODEL_PRICES.get(name)
     if not price or tokens_in is None or tokens_out is None:
         return None
-    return round((tokens_in * price[0] + tokens_out * price[1]) / 1_000_000, 6)
+    read_mult = CACHE_READ_MULT.get(name, CACHE_READ_MULT_DEFAULT)
+    input_usd = (tokens_in
+                 + (cache_write or 0) * CACHE_WRITE_MULT
+                 + (cache_read or 0) * read_mult) * price[0]
+    return round((input_usd + tokens_out * price[1]) / 1_000_000, 6)
 
 
 def _provider() -> str:
@@ -658,7 +674,11 @@ def extract_handwritten(img_bytes: bytes, media_type: str = "image/jpeg",
             "escalated": bool(escalate),
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
-            "usd": estimate_cost(served, tokens_in, tokens_out),
+            "cache_read": usage.get("cache_read"),
+            "cache_write": usage.get("cache_write"),
+            "usd": estimate_cost(served, tokens_in, tokens_out,
+                                 usage.get("cache_read"),
+                                 usage.get("cache_write")),
         }]
         if err:
             log.error("vision extraction produced no usable result: %s", err)
