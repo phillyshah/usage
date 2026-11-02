@@ -16,14 +16,14 @@ Last updated: 2026-11-02.
 
 | | |
 |---|---|
-| Version in `main` | **2.30.0**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
+| Version in `main` | **2.30.1**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 521 passed, 2 skipped |
+| Tests | 524 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -139,7 +139,56 @@ have produced it is over. One read of /proc/self/statm costs microseconds.
 
 `/diag` also reports `rss_mb` / `peak_mb` against the 3 GB container limit.
 
+### The 2+ minute trace was the storage write, not the reading (2.30.1)
+
+**Correcting the entry below, which was wrong.** I attributed a 2+ minute
+debug trace to the barcode passes plus 2.28.0's three vision calls. The
+traceback says otherwise, and it is upstream of all of it:
+
+```
+main.py:920 _run -> transient.py:67 retry -> run.py:83 ingest_image
+  -> storage.py:76 put_object -> httpcore.ReadTimeout
+```
+
+`put_object` runs **before** any barcode or model work, so the two minutes and
+the 500 were one event, not two. The barcode measurements below are real; they
+are just not what Andy was waiting on.
+
+What actually happened, and the arithmetic is the whole story:
+
+* `create_client()` was called with **no options**, so storage3 kept its own
+  `DEFAULT_TIMEOUT` of 20 seconds. "How long may one call hang" had two
+  different answers (postgrest's and storage3's), neither of them ours.
+* `transient.is_transient()` **does** match `ReadTimeout` — by type name and by
+  the text "timed out". So the retry fired, as designed.
+* And that is why it was slow: 4 attempts x 20s + backoff ~= **84 seconds**,
+  then the last exception re-raised as a bare `Internal Server Error`.
+
+The retry working correctly is what made it slow. An attempt count bounds the
+load on the server; it does not bound what a person waits. So `retry()` gained
+`max_seconds`, a wall-clock budget: the count protects the server, the budget
+protects whoever is watching the spinner.
+
+A second endpoint (`reference_status` -> `masters_freshness`) timed out against
+Supabase at the same moment. The client is **one shared instance across every
+worker thread**, so a stuck connection is everyone's stuck connection — the
+same family as the GOAWAY contention 2.22.0 fixed, a different exception type.
+
+Two other things came out of that traceback:
+
+* **The ticket row was created before the upload**, so a hung upload left a
+  half-made row behind — one per retry attempt, four per failed upload. The
+  image is written first now, under its own uuid (nothing derives the path from
+  the ticket id; everything reads `source_image_path`), and the row is created
+  only once there are bytes for it to point at.
+* **`/debug/trace` returned a bare 500.** Now `StorageUnavailable` -> 503 with a
+  string `detail` that says what failed and whether to retry — the house
+  pattern from 2.20.0, for exactly the same reason.
+
 ### Where two minutes goes on a distributor form (2.30.0)
+
+**Superseded as an explanation — see the entry above.** The measurements stand
+and the latency is real, but it was not what Andy was waiting on.
 
 Andy asked whether a 2+ minute debug trace was normal. Measured on the real
 sideways HCA form:

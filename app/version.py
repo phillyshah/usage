@@ -5,9 +5,24 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.30.0"
+VERSION = "2.30.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.30.1",
+        "date": "2026-11-02",
+        "notes": [
+            "Fixed the slow debug trace that ended in 'Internal Server "
+            "Error'. The hold-up was saving the image to storage, before any "
+            "reading started — it hung, was retried four times at twenty "
+            "seconds each, and then gave up. About eighty seconds of waiting "
+            "for an error that was never going to change",
+            "A failed save now gives up sooner and says what happened and "
+            "whether to try again, instead of 'Internal Server Error'",
+            "A save that fails no longer leaves a half-made ticket behind — "
+            "it was leaving one for every retry",
+        ],
+    },
     {
         "version": "2.30.0",
         "date": "2026-11-02",

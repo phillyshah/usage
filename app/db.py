@@ -215,7 +215,27 @@ class _SupabaseBackend:
                 "security errors until this is the service_role secret.",
                 role,
             )
-        self.client = create_client(settings.supabase_url, settings.supabase_service_key)
+        # Timeouts are set here rather than left to the libraries. storage3's
+        # own default is 20s and postgrest's is separate from it, so "how long
+        # can one call hang" had two different answers, neither of them ours.
+        # Both endpoints timed out together on 2 Nov; this client is a single
+        # shared instance across every worker thread, so one stuck connection
+        # is everyone's stuck connection.
+        try:
+            from supabase.lib.client_options import ClientOptions
+
+            options = ClientOptions(
+                postgrest_client_timeout=settings.supabase_timeout,
+                storage_client_timeout=settings.supabase_timeout,
+            )
+            self.client = create_client(settings.supabase_url,
+                                        settings.supabase_service_key,
+                                        options=options)
+        except Exception as e:   # pragma: no cover - older/newer supabase-py
+            log.warning("could not set Supabase client timeouts (%s); using "
+                        "the library defaults", e)
+            self.client = create_client(settings.supabase_url,
+                                        settings.supabase_service_key)
 
     def insert(self, table: str, row: dict) -> dict:
         res = self.client.table(table).insert(row).execute()

@@ -15,6 +15,7 @@ full-looking spreadsheet with every handwritten field blank.
 from __future__ import annotations
 
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from app import memlog
@@ -26,6 +27,16 @@ from app.pipeline.template import detect_template, geometry_for
 from app.storage import TICKET_IMAGES, get_object, put_object, split_ref
 
 log = logging.getLogger("pipeline.run")
+
+
+class StorageUnavailable(RuntimeError):
+    """The image could not be written to object storage.
+
+    Its own type so the routes can say what happened. A storage timeout used
+    to surface as a bare "Internal Server Error", which tells whoever is
+    waiting nothing about whether to retry, fix something, or call someone —
+    the same reasoning as the 503 in 2.20.0.
+    """
 
 
 class VisionUnavailable(RuntimeError):
@@ -81,22 +92,37 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
                  ticket["ticket_id"], filename)
         return {"ticket_id": ticket["ticket_id"], "status": "manual_queue"}
 
+    # The image goes up BEFORE the ticket row exists, under its own id.
+    #
+    # It used to be the other way round, and a storage timeout then left a
+    # half-made ticket behind — one per attempt, because the caller retries
+    # this whole function. Nothing derives the image path from the ticket id;
+    # everything reads source_image_path. So the upload is the thing that can
+    # fail, it fails on its own, and a failure leaves no row at all.
+    #
+    # Its own bounded retry, because the caller's budget covers the whole
+    # ingest and this is the part that actually hangs.
+    image_name = f"{uuid.uuid4()}.jpg"
+    try:
+        ref = transient.retry(put_object, TICKET_IMAGES, image_name,
+                              stored_bytes, "image/jpeg",
+                              attempts=3, label=f"store {filename or image_name}",
+                              max_seconds=settings.storage_retry_seconds)
+    except Exception as e:
+        log.error("could not store the image for %s: %s", filename, e)
+        raise StorageUnavailable(
+            "The image could not be saved to storage — Supabase did not "
+            f"respond in time. Nothing was lost; try again. ({type(e).__name__})"
+        ) from e
+
     ticket = db.create_ticket({
         "batch_id": batch_id,
         "entity": template,
         "source_filename": filename or None,
+        "source_image_path": ref,
         "status": "pending_review",
     })
-    try:
-        ref = put_object(TICKET_IMAGES, f"{ticket['ticket_id']}.jpg",
-                         stored_bytes, "image/jpeg")
-    except Exception:
-        db.update_ticket(ticket["ticket_id"], {
-            "status": "manual_queue",
-            "flags": ["Could not store the image — manual review required"],
-        })
-        raise
-    db.update_ticket(ticket["ticket_id"], {"source_image_path": ref})
+    memlog.mark("ingest.stored", ticket=ticket["ticket_id"])
     return {"ticket_id": ticket["ticket_id"], "status": "pending_review"}
 
 

@@ -47,6 +47,23 @@ re-litigating, and open threads.
   the box and it shows as `OOMKilled=true`. Measured headroom: a ten-page
   400 DPI PDF peaks ~390 MB; four at once ~994 MB.
 
+## Supabase client (2.30.1)
+- **One shared client across every worker thread.** A stuck connection is
+  everyone's stuck connection — two unrelated endpoints timed out together on
+  2 Nov. Same family as the GOAWAY contention 2.22.0 fixed.
+- Timeouts are set explicitly (`SUPABASE_TIMEOUT`, default 15s). `create_client()`
+  with no options leaves storage3 on its own `DEFAULT_TIMEOUT` of 20s and
+  postgrest on a different one, so "how long can a call hang" had two answers,
+  neither ours.
+- **An attempt count does not bound what a person waits.** 4 attempts x 20s =
+  84s before the error arrives. `transient.retry(..., max_seconds=)` is the
+  wall-clock budget; use it on anything an interactive request waits for.
+  `is_transient()` already matches `ReadTimeout` — a retry that fires correctly
+  is what made that trace slow, not a retry that failed to fire.
+- **Write the object before the row.** `ingest_image` uploads under its own
+  uuid and creates the ticket only once there are bytes to point at; the old
+  order left one orphan row per retry attempt.
+
 ## Before diagnosing another memory or slowness problem — LOOK, don't infer
 - `app/memlog.py` logs RSS + per-thread delta at every heavy stage (always on,
   `docker logs usage-labels-api-1 2>&1 | grep "^.*mem stage="`). **The last

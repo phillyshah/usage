@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     anthropic_model: str = "sonnet"
 
     # --- Supabase (Postgres + Storage) ---
+    # Explicit, because the defaults are not ours to rely on and the storage
+    # one bit: create_client() with no options leaves storage3 on its own
+    # DEFAULT_TIMEOUT of 20s, and a hung upload retried four times is 84
+    # seconds of somebody watching a spinner before the error arrives.
+    supabase_timeout: int = 15
+    # The wall clock a single storage write may spend, retries included. Below
+    # one timeout would mean never retrying at all.
+    storage_retry_seconds: float = 25.0
     supabase_url: str = ""
     supabase_service_key: str = ""
 
