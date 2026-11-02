@@ -8,7 +8,7 @@ The user-facing release notes live in `app/version.py` (`CHANGELOG`), which is
 what the app's "What's New" panel reads. Root `CHANGELOG.md` is the formal
 Keep-a-Changelog record and stopped being maintained after 2.0.0.
 
-Last updated: 2026-10-31.
+Last updated: 2026-11-02.
 
 ---
 
@@ -16,14 +16,14 @@ Last updated: 2026-10-31.
 
 | | |
 |---|---|
-| Version in `main` | **2.26.1** (PR #55/#56); **2.28.0** on `claude/clever-cerf-oaqc5g` (2.27.0 was merged and reversed the same day) |
+| Version in `main` | **2.29.0**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 494 passed, 2 skipped |
+| Tests | 501 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -116,6 +116,53 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### The render scale is capped on the PAGE, not on the DPI (2.29.0)
+
+On 2 November the host OOM killer took uvicorn out **five times in twenty
+minutes**, at ~5.3 GB RSS each time, on a 7.9 GB box with no swap. Every
+request in flight got a 502 from Traefik, so what Andy saw was *"We couldn't
+upload your tickets — Bad Gateway"* on a perfectly good photo. The upload was
+not the cause; it was just what was in flight.
+
+The cause is one line: `scale = dpi / 72`.
+
+That multiplies whatever page size the PDF **declares**, and the declared size
+is the file's, not ours. A scanner app will happily emit a page box of 23 x 30
+inches for an ordinary letter-size ticket. At 400 DPI:
+
+| | |
+|---|---|
+| letter 8.5 x 11 | 15 MP, 60 MB bitmap |
+| a declared 23.6 x 30.6 | **115 MP, 462 MB bitmap, ~1.2 GB peak for ONE page** |
+
+`pdf_to_page_images` then held every page until the document was done, and
+`/images` ingests up to four uploads in parallel. Four such files is ~7.5 GB,
+which is the number the kernel saw.
+
+Three changes, each measured on a ten-page file with those page dimensions:
+
+| | peak |
+|---|---|
+| before | 1874 MB |
+| + closing the PDFium bitmap instead of leaving it to the GC | 1440 MB |
+| + streaming pages (`iter_page_images`) instead of a list | 1283 MB |
+| + `MAX_RENDER_PIXELS` = 30 MP | **386 MB** |
+| four of them at once, with the render lock | **994 MB** |
+
+**The DPI was not lowered**, and this is the part worth not re-litigating: the
+cap is on the rendered pixel count, so a letter page still renders at the full
+400 DPI that 2.24.0 measured as the difference between reading three of four
+DataMatrix codes and reading all four. A test pins that directly. Only a page
+whose declared size is already unreasonable is scaled back, and for those the
+alternative to scaling back is not a sharper image — it is a dead server.
+
+`docker-compose.yml` now sets `mem_limit: 3g`. With no limit it is the KERNEL
+that picks a victim, and it picks the biggest process, which is always us —
+taking Traefik's upstream with it and making the failure look random because
+`restart: unless-stopped` brought it back before anyone looked. A container
+limit turns it into `OOMKilled=true` on `docker inspect`: a diagnosis rather
+than a mystery.
 
 ### A ladder, not one second reader — and the 2.27.0 reversal (2.28.0)
 
@@ -592,6 +639,31 @@ surfaces `cache_read_input_tokens`.
 ---
 
 ## What shipped
+
+### 2.29.0 — The Bad Gateway was an out-of-memory kill
+
+Reasoning and the measurements in **The render scale is capped on the PAGE**
+above. Shape of the change, all in `app/pipeline/pdf.py`:
+
+* `_scale_for(page, dpi)` — holds one rendered page under `MAX_RENDER_PIXELS`
+  (30 MP), computed from the page's own declared size.
+* `_render_one()` closes the PDFium bitmap explicitly. `page.render()` hands
+  back a buffer PDFium allocated and leaving it to the garbage collector is how
+  ten pages' worth were alive at once; `.convert("RGB")` has already copied the
+  pixels, so closing it there is safe.
+* `iter_page_images()` — the streaming form, and what callers should use.
+  `pdf_to_page_images()` is kept as a list wrapper for the tests.
+* `render_page(data, i)` — one page. `/debug/trace` traces page 1 and was
+  rendering up to fifty pages to get it.
+* `_RENDER_LOCK` — one render at a time. Four parallel uploads otherwise
+  multiply the peak by four, which is what turned a bad file into an outage.
+
+`docker-compose.yml` gains `mem_limit: 3g` / `memswap_limit: 3g`.
+
+Worth remembering when reading the logs from that day: the tail showed a
+perfectly healthy `/debug/trace` finishing normally. That was **after** the
+restart. An OOM kill leaves no traceback and no final log line — the process
+simply stops — so "the logs look fine" is the signature, not a counter-argument.
 
 ### 2.28.0 — Sonnet first, Opus for the remainder; model names that don't go stale
 

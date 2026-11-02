@@ -3,6 +3,21 @@ services:
     build: .
     env_file: .env
     networks: [proxy]
+    # A ceiling, so a pathological upload kills THIS CONTAINER and not the box.
+    #
+    # On 2 Nov the host OOM killer took uvicorn out five times in twenty
+    # minutes at ~5.3 GB RSS each time (7.9 GB host, no swap), and every
+    # request in flight got a 502 from Traefik — including uploads that had
+    # nothing to do with the memory. With no limit set it is the KERNEL that
+    # picks a victim, and it picks the biggest process, which is always us.
+    #
+    # 3 GB is comfortably above a real workload now that pages render one at a
+    # time under a pixel cap (a ten-page 400 DPI PDF measures ~390 MB peak),
+    # and well under the host's RAM, so Traefik and the rest of the box survive
+    # whatever this container does. Hitting it shows up as OOMKilled=true on
+    # `docker inspect`, which is a diagnosis rather than a mystery.
+    mem_limit: 3g
+    memswap_limit: 3g
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.labels.rule=Host(`usage.90ten.life`)"
