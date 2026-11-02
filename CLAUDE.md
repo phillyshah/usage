@@ -48,12 +48,17 @@ re-litigating, and open threads.
   400 DPI PDF peaks ~390 MB; four at once ~994 MB.
 
 ## Supabase client (2.31.0)
-- **HTTP/2 is OFF** (`SUPABASE_HTTP2`, default false), and that is load-bearing.
-  storage3 builds its httpx client with `http2=True`; HTTP/2 opens with a
-  65,535-byte flow-control window, so a POST body over 64 KB stalls waiting for
-  a WINDOW_UPDATE that never came — three 293 KB probes failed at exactly 20.0s
-  each on a fresh container while postgrest queries (all under 64 KB) worked.
-  Every ticket image is over 64 KB.
+- **HTTP/2 is OFF** (`SUPABASE_HTTP2`, default false). NOTE: this was shipped on
+  a theory that a direct A/B then DISPROVED — HTTP/1.1 failed identically. It is
+  kept because HTTP/1.1 is the simpler transport and 2.22.0's GOAWAY trouble was
+  also HTTP/2, but do not cite it as the cause of anything.
+- **The 2 Nov storage stall was never explained.** Five theories — payload size,
+  path MTU, stale keep-alive, HTTP/2 flow control, slow-transfer-cut-off — all
+  disproved by measurement. It cleared on its own; healthy rate is ~150 KB/s
+  (`storage upload ok in 2.5s: ...363KB (148 KB/s)`). Assume it can recur.
+- **First move if it does:** `docker logs usage-labels-api-1 2>&1 | grep "storage
+  upload"` for the rate, then `docker exec usage-labels-api-1 python
+  scripts/diagnose_storage.py`. Do NOT theorise first — that cost a day.
 - **It must be `SyncClientOptions`, not `ClientOptions`** — different classes,
   only the sync one has `storage`. Passing the wrong one raises, and a silent
   fallback leaves HTTP/2 ON. Assert the settings reach the client
