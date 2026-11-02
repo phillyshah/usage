@@ -125,6 +125,14 @@ def diag():
     configured Supabase key (never the key itself) so a misconfigured
     service_role key can be spotted without pasting any secret."""
     info: dict = {"datastore": "offline" if db.offline else "supabase"}
+    # What this process weighs. The container has a 3 GB ceiling; a `peak_mb`
+    # near it on a process that has been up a while is the thing to chase, and
+    # it is the one number nobody could see during the 2 Nov outage.
+    from app import memlog
+
+    info["memory"] = {"rss_mb": round(memlog.rss_mb()),
+                      "peak_mb": round(memlog.peak_mb()),
+                      "limit_mb": 3072}
     if not db.offline:
         role = detect_key_role(settings.supabase_service_key) or "unknown"
         info["key_role"] = role

@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
+from app import memlog
 from app.config import settings
 from app.db import db
 from app.pipeline import assemble, barcode, preprocess, vision
@@ -56,7 +57,11 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
     # Capped before anything else touches it. What gets stored here is what
     # every later batch run decodes, three at a time — so an image that is too
     # big to work on is a problem that comes back on every run, not once.
+    memlog.reset()
+    memlog.mark("ingest.start", file=filename, bytes=len(data))
     img = preprocess.decode_image(data, max_px=preprocess.MAX_IMAGE_PIXELS)
+    memlog.mark("ingest.decoded",
+                px=f"{(img.shape[0] * img.shape[1]) / 1e6:.0f}MP" if img is not None else "none")
     template = detect_template(img, filename)
 
     # Encode before persisting anything, so a ticket never points at bytes we
@@ -110,6 +115,8 @@ def _grid_crop(img, template: str):
 def process_ticket(ticket: dict) -> dict:
     """Run extraction for a single pending ticket and persist the result."""
     ticket_id = ticket["ticket_id"]
+    memlog.reset()
+    memlog.mark("process.start", ticket=ticket_id)
     img = None
     image_bytes = b""
     ref = ticket.get("source_image_path")
@@ -123,6 +130,10 @@ def process_ticket(ticket: dict) -> dict:
             # run, because a batch killed by the kernel leaves them pending.
             img = preprocess.decode_image(image_bytes,
                                           max_px=preprocess.MAX_IMAGE_PIXELS)
+            memlog.mark("process.image_loaded", ticket=ticket_id,
+                        stored=f"{len(image_bytes) / 1e6:.1f}MB",
+                        px=f"{(img.shape[0] * img.shape[1]) / 1e6:.0f}MP"
+                        if img is not None else "none")
         except Exception as e:  # pragma: no cover
             log.warning("could not load the image for %s: %s", ticket_id, e)
 
@@ -151,8 +162,12 @@ def process_ticket(ticket: dict) -> dict:
     # resolution because they need every pixel; every vision provider
     # downsamples a large image server-side before looking at it, so sending
     # the full page buys no accuracy and costs upload time and tokens.
+    memlog.mark("process.barcodes_done", ticket=ticket_id, labels=len(labels))
     vision_bytes = preprocess.for_vision(img) if img is not None else image_bytes
+    memlog.mark("process.vision_image_ready", ticket=ticket_id,
+                sending=f"{len(vision_bytes) / 1e6:.1f}MB")
     vresult = vision.extract_handwritten(vision_bytes)
+    memlog.mark("process.vision_done", ticket=ticket_id)
 
     # If vision returned more priced lines than decoded labels, pad with empty
     # label dicts so vision-only lines still appear (barcode failed on those).
@@ -283,8 +298,11 @@ def run_batch(batch_id: str | None = None) -> dict:
         # Cap concurrency low: the work shares one Supabase HTTP/2 client, and too
         # many simultaneous tickets trigger GOAWAY/ConnectionTerminated. Retries
         # cover the residual; bulk writes keep each ticket cheap regardless.
+        memlog.reset()
+        memlog.mark("batch.start", tickets=len(pending))
         with ThreadPoolExecutor(max_workers=min(3, len(pending))) as ex:
             summaries = list(ex.map(_safe_process, pending))
+        memlog.mark("batch.tickets_done", tickets=len(pending))
         vision_failures = sum(1 for r in summaries if (r or {}).get("vision_error"))
         if vision_failures:
             log.error("%d of %d tickets came back with nothing read",
@@ -302,6 +320,8 @@ def run_batch(batch_id: str | None = None) -> dict:
     tickets = db.tickets_for_batch(batch_id)
     # Build the workbook from persisted rows.
     workbook_bytes = write_review_workbook(batch_id)
+    memlog.mark("batch.workbook_built",
+                size=f"{len(workbook_bytes) / 1e6:.1f}MB", tickets=len(tickets))
     sheet_path = put_object(
         OUTPUT_SHEETS,
         f"{batch_id}.xlsx",

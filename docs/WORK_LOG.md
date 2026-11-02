@@ -16,14 +16,14 @@ Last updated: 2026-11-02.
 
 | | |
 |---|---|
-| Version in `main` | **2.29.1**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
+| Version in `main` | **2.30.0**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 511 passed, 2 skipped |
+| Tests | 521 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -116,6 +116,55 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### Measure it in production, or keep guessing (2.30.0)
+
+Two OOM diagnoses in two days, both from reading code, both shipped as the
+answer, and the failure came back after each. The fixes were real — the
+measurements behind them hold — but neither was demonstrably Andy's failure,
+because **nobody could see memory move on the box.** An OOM kill leaves no
+traceback: the process stops, Docker restarts it, and the log tail you get
+afterwards is a healthy process doing normal work.
+
+`app/memlog.py` logs RSS and the per-thread delta at every heavy stage:
+`ingest.decoded`, `process.image_loaded`, `process.barcodes_done`,
+`process.vision_done`, `batch.tickets_done`, `batch.workbook_built`,
+`pdf.page_rendered`. The last `mem ` line before a restart names the stage that
+was running when the kernel fired.
+
+**Deliberately always on, not behind a flag.** The failure arrives without
+warning and kills the process outright, so there is no moment at which anyone
+could turn tracing on first — by the time you want the data, the run that would
+have produced it is over. One read of /proc/self/statm costs microseconds.
+
+`/diag` also reports `rss_mb` / `peak_mb` against the 3 GB container limit.
+
+### Where two minutes goes on a distributor form (2.30.0)
+
+Andy asked whether a 2+ minute debug trace was normal. Measured on the real
+sideways HCA form:
+
+| | |
+|---|---|
+| whole-page barcode pass | **12.4s** |
+| grid-crop barcode pass | **12.2s** |
+| vision reads | up to **three** |
+
+The barcode number is a floor, not a worst case: `_raw_payloads` falls through
+`_SHRINK_LADDER` on a miss, each rung with a 12-second timeout, so a pass that
+finds nothing costs ~36s and the two passes together can reach ~72s before any
+model is called.
+
+And the three vision reads are **2.28.0's doing**. The escalation ladder turned
+one re-read into two, and this form is exactly the case that triggers both: its
+Unit Price column is blank on the page, so the cell is red after the primary
+read, red after Sonnet, and red after Opus. The 251-re-reads-250-still-empty
+measurement said this would happen; what it did not say was that the latency
+would double along with it.
+
+Not changed unilaterally — Andy has decided the escalation policy twice and it
+is his call. What changed is that the Debug Console now shows per-step
+durations, so the question is answerable from the trace instead of from me.
 
 ### The cap belongs where an image is READ, too (2.29.1)
 

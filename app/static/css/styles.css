@@ -741,6 +741,14 @@ a { color: var(--teal-600); }
   flex: 1;
   padding-top: 2px;
 }
+.debug-step-ms {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.75rem;
+  color: var(--ink-400, var(--ink-500));
+  margin-top: 2px;
+  padding: 0 8px;
+}
 .debug-step-chevron {
   flex-shrink: 0;
   color: var(--ink-300);

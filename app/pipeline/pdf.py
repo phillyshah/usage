@@ -16,6 +16,8 @@ import io
 import logging
 import threading
 
+from app import memlog
+
 try:
     import pypdfium2 as pdfium
 
@@ -164,6 +166,8 @@ def iter_page_images(data: bytes, dpi: int = DEFAULT_DPI):
                     jpeg = _render_one(page, _scale_for(page, dpi))
             finally:
                 page.close()
+            memlog.mark("pdf.page_rendered", page=f"{i + 1}/{n}",
+                        jpeg=f"{len(jpeg) / 1e6:.1f}MB")
             yield jpeg
             del jpeg
     finally:

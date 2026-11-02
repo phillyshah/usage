@@ -5,9 +5,25 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.29.1"
+VERSION = "2.30.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.30.0",
+        "date": "2026-11-02",
+        "notes": [
+            "The app now logs what it weighs at each stage of a run. Twice "
+            "this week the server ran out of memory and was killed with no "
+            "trace of why — an out-of-memory kill leaves no error message, "
+            "the process simply stops. The last line in the log now names the "
+            "stage it was in",
+            "The Debug Console shows how long each step took. A trace that "
+            "ran for two minutes could say what it did and nothing about "
+            "where the time went",
+            "/diag reports current and peak memory against the container's "
+            "limit",
+        ],
+    },
     {
         "version": "2.29.1",
         "date": "2026-11-02",
