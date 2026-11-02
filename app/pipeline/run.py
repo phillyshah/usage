@@ -53,7 +53,10 @@ def ingest_image(data: bytes, filename: str, batch_id: str) -> dict:
     Surgery Date and the Surgeon out of the header, and a ticket that failed the
     gate produced zero rows in the deliverable while still appearing complete.
     """
-    img = preprocess.decode_image(data)
+    # Capped before anything else touches it. What gets stored here is what
+    # every later batch run decodes, three at a time — so an image that is too
+    # big to work on is a problem that comes back on every run, not once.
+    img = preprocess.decode_image(data, max_px=preprocess.MAX_IMAGE_PIXELS)
     template = detect_template(img, filename)
 
     # Encode before persisting anything, so a ticket never points at bytes we
@@ -114,7 +117,12 @@ def process_ticket(ticket: dict) -> dict:
         try:
             bucket, path = split_ref(ref)
             image_bytes = get_object(bucket, path)
-            img = preprocess.decode_image(image_bytes)
+            # Capped on the way IN as well as on the way out. Tickets stored
+            # before 2.29.0 can be 115 MP, and three of those through the
+            # barcode pass measured 2.1 GB — on a batch that retries them every
+            # run, because a batch killed by the kernel leaves them pending.
+            img = preprocess.decode_image(image_bytes,
+                                          max_px=preprocess.MAX_IMAGE_PIXELS)
         except Exception as e:  # pragma: no cover
             log.warning("could not load the image for %s: %s", ticket_id, e)
 

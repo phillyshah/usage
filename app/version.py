@@ -5,9 +5,26 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.29.0"
+VERSION = "2.29.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.29.1",
+        "date": "2026-11-02",
+        "notes": [
+            "Finishes the Bad Gateway fix. 2.29.0 stopped the app from "
+            "CREATING oversized pages; the ones already saved were still "
+            "there, and every extraction run picked them up again and ran the "
+            "server out of memory — which is why uploading an ordinary photo "
+            "still failed",
+            "An oversized image is now opened at a smaller size rather than "
+            "opened whole and then shrunk, which is where the memory actually "
+            "went. Three of them together went from 2.1 GB to 0.6 GB",
+            "No change to a normal ticket. A phone photo, a scan and a "
+            "letter-size page are all well inside the limit, and the barcodes "
+            "read exactly as before",
+        ],
+    },
     {
         "version": "2.29.0",
         "date": "2026-11-02",

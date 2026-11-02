@@ -34,6 +34,15 @@ re-litigating, and open threads.
   (one page). `pdf_to_page_images()` holds the whole document and exists for the
   tests. `_RENDER_LOCK` keeps it to one render at a time because `/images`
   ingests four uploads in parallel.
+- **The cap applies where an image is READ as well as written (2.29.1).**
+  Capping only the write side left every already-stored oversized ticket
+  killing the box on each batch run — a batch the kernel kills leaves its
+  tickets pending, so the next run repeats it. `ingest_image` and
+  `process_ticket` both pass `max_px=preprocess.MAX_IMAGE_PIXELS`.
+- **`cap_pixels(decode_image(x))` is NOT the fix** — it allocates the full
+  array first, and the allocation is the cost (measured: a 6% saving). Pass
+  `max_px` to `decode_image` so libjpeg scales during decoding
+  (`IMREAD_REDUCED_COLOR_N`): 2143 MB -> 608 MB for three 115 MP tickets.
 - `docker-compose.yml` sets `mem_limit: 3g`, so the container dies instead of
   the box and it shows as `OOMKilled=true`. Measured headroom: a ten-page
   400 DPI PDF peaks ~390 MB; four at once ~994 MB.

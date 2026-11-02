@@ -16,14 +16,14 @@ Last updated: 2026-11-02.
 
 | | |
 |---|---|
-| Version in `main` | **2.29.0**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
+| Version in `main` | **2.29.1**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 501 passed, 2 skipped |
+| Tests | 511 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -116,6 +116,41 @@ the initials populated in column D.
 ---
 
 ## Decisions worth not re-litigating
+
+### The cap belongs where an image is READ, too (2.29.1)
+
+2.29.0 stopped the app RENDERING pages at 115 MP. The server kept dying,
+because the oversized pages were **already stored**. A batch killed by the
+kernel leaves its tickets pending; the next run picks the same ones up and dies
+again. The loop had nothing to do with what was uploaded next — an upload
+arriving mid-kill just inherited the 502, which is why an ordinary phone photo
+still came back as "Bad Gateway".
+
+Measured, on a stored 115 MP page:
+
+| | peak |
+|---|---|
+| decode one | 744 MB |
+| three at batch concurrency (`run_batch` uses 3 workers) | **2143 MB** |
+| cap applied AFTER `decode_image` | 2018 MB — a 6% saving, i.e. nothing |
+| decode at a reduced scale (`IMREAD_REDUCED_COLOR_N`) | **608 MB** |
+
+The middle row is the point worth keeping. `cap_pixels(decode_image(data))`
+looks like the fix and is not: the full array is allocated before anything is
+saved, and the allocation IS the cost. libjpeg can scale during decoding, so
+`decode_image(data, max_px=...)` probes at 1/8 (115 MP comes back as 1.8 MP),
+picks the smallest reduction that fits, and the big array never exists.
+
+Applied at **both** ends — `ingest_image` so nothing oversized is stored again,
+and `process_ticket` so the ones already stored stop killing the box. A test
+asserts both call sites, because either one alone leaves the failure in place.
+
+`MAX_IMAGE_PIXELS` is 30 MP, the same number as `pdf.MAX_RENDER_PIXELS`, and it
+is a survival limit rather than tidiness: a 24 MP camera, a 400 DPI letter page
+and every phone photo pass through untouched. Checked against barcode quality
+on a real 115 MP page — 5 codes at full size, 6 after the cap, because
+different scales catch different codes, which is the same thing 2.24.0 found
+when it pooled two passes.
 
 ### The render scale is capped on the PAGE, not on the DPI (2.29.0)
 
