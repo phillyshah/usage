@@ -23,7 +23,8 @@ from app.db import db
 from app.jobs import shutdown_scheduler, start_scheduler
 from app.metrics import auto_resolve_by_week
 from app.pipeline import transient
-from app.pipeline.run import ingest_image, process_ticket, run_batch
+from app.pipeline.run import (StorageUnavailable, ingest_image,
+                              process_ticket, run_batch)
 from app.storage import OUTPUT_SHEETS, get_object, split_ref
 from app.supabase_key import WRONG_KEY_HELP, detect_key_role
 from app.version import CHANGELOG, VERSION
@@ -125,6 +126,14 @@ def diag():
     configured Supabase key (never the key itself) so a misconfigured
     service_role key can be spotted without pasting any secret."""
     info: dict = {"datastore": "offline" if db.offline else "supabase"}
+    # What this process weighs. The container has a 3 GB ceiling; a `peak_mb`
+    # near it on a process that has been up a while is the thing to chase, and
+    # it is the one number nobody could see during the 2 Nov outage.
+    from app import memlog
+
+    info["memory"] = {"rss_mb": round(memlog.rss_mb()),
+                      "peak_mb": round(memlog.peak_mb()),
+                      "limit_mb": 3072}
     if not db.offline:
         role = detect_key_role(settings.supabase_service_key) or "unknown"
         info["key_role"] = role
@@ -231,6 +240,12 @@ async def upload_images(files: list[UploadFile] = File(...)):
             r = transient.retry(ingest_image, data, filename, batch["id"],
                                 label=filename or "upload")
             return [{"ticket_id": r["ticket_id"], "status": r["status"], "filename": filename}]
+        except StorageUnavailable as exc:
+            # Isolated per file and named for what it is. The generic handler
+            # below would have called a storage timeout a database error.
+            log.error("ingest failed for %s: %s", filename, exc)
+            return [{"ticket_id": None, "status": "error", "filename": filename,
+                     "error": str(exc)}]
         except Exception as exc:
             log.exception("ingest failed for %s", filename)
             return [{"ticket_id": None, "status": "error", "filename": filename,
@@ -976,7 +991,14 @@ async def debug_trace(file: UploadFile = File(...)):
         }
 
     loop = get_event_loop()
-    return await loop.run_in_executor(_executor, ctx.run, _run)
+    try:
+        return await loop.run_in_executor(_executor, ctx.run, _run)
+    except StorageUnavailable as e:
+        # 503 with a STRING detail, the house pattern from 2.20.0: api.js only
+        # unwraps a server message when it is one, and "Internal Server Error"
+        # tells whoever is waiting nothing about whether to try again.
+        log.error("debug trace could not store the image: %s", e)
+        return JSONResponse({"detail": str(e)}, status_code=503)
 
 
 @app.post("/debug/trace/{ticket_id}/correct")

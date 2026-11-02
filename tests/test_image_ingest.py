@@ -5,12 +5,15 @@ was a Supabase schema error (PGRST204: the `source_filename` column was missing
 because db/08 was never applied). The fix isolates each file (a failure becomes a
 per-file "error" status instead of a 500) and keeps the PHI gate airtight: if the
 redacted image can't be encoded we store NOTHING (never the raw upload), and if
-storage fails we flip the ticket to manual_queue and re-raise.
+storage fails no ticket row is created at all — the image is written first,
+under its own id, so a failed upload leaves nothing half-made behind (2.30.1;
+before that the caller's retry loop left one orphan row per attempt).
 
 These tests lock that behavior in. They run hermetically: conftest forces
 OFFLINE_MODE so there is no network and schema_check() always passes.
 """
 import numpy as np
+import pytest
 from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
@@ -124,31 +127,80 @@ def test_encode_failure_routes_to_manual_queue_and_stores_nothing():
 
 
 # ---------------------------------------------------------------------------
-# 4. Storage failure -> ticket flipped to manual_queue and the error propagates.
+# 4. Storage failure -> no ticket row at all, and a named error propagates.
+#
+# This used to create the ticket first and flip it to manual_queue when the
+# upload failed. The caller retries ingest_image, so one hung upload left FOUR
+# half-made rows behind — and on 2 Nov a Supabase read timeout did exactly
+# that while the person watching got "Internal Server Error".
+#
+# The image is written first now, under its own id, and the row is created only
+# once there are bytes for it to point at. The failure reaches the person
+# through the response instead of through a row nobody asked for.
 # ---------------------------------------------------------------------------
-def test_storage_failure_flips_ticket_to_manual_queue_and_raises():
+def test_a_storage_failure_leaves_no_ticket_behind():
     batch = db.create_batch()
 
-    boom = Exception("storage down")
     with patch.object(run.preprocess, "encode_image", return_value=b"jpegbytes"), \
-         patch.object(run, "put_object", side_effect=boom):
-        try:
+         patch.object(run, "put_object", side_effect=Exception("storage down")):
+        with pytest.raises(run.StorageUnavailable) as caught:
             ingest_image(_jpeg_bytes(), "MO-store-fail.jpg", batch["id"])
-        except Exception as exc:
-            raised = exc
-        else:
-            raised = None
 
-    # The error must propagate so the caller can report it per-file.
-    assert raised is boom
+    assert db.tickets_for_batch(batch["id"]) == []
+    assert "try again" in str(caught.value), "it has to say whether to retry"
 
-    # The ticket that was created must not be left pointing at nothing: it is
-    # flipped to manual_queue with no stored image path.
-    tickets = db.tickets_for_batch(batch["id"])
-    assert len(tickets) == 1
-    ticket = tickets[0]
-    assert ticket["status"] == "manual_queue"
-    assert not ticket.get("source_image_path")
+
+def test_the_upload_is_retried_before_it_is_given_up_on():
+    """A momentary storage blip must not cost the photo — that is the 2.22.0
+    lesson. What is new is that the retrying is bounded."""
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) < 2:
+            raise Exception("Server disconnected")
+        return "redacted-images/ok.jpg"
+
+    batch = db.create_batch()
+    with patch.object(run.preprocess, "encode_image", return_value=b"jpegbytes"), \
+         patch.object(run, "put_object", side_effect=flaky):
+        res = ingest_image(_jpeg_bytes(), "MO-flaky.jpg", batch["id"])
+
+    assert len(calls) == 2
+    assert db.get_ticket(res["ticket_id"])["source_image_path"] == "redacted-images/ok.jpg"
+
+
+def test_a_storage_timeout_is_recognised_as_worth_retrying():
+    """The classifier is what decides whether the 2 Nov failure retried at all.
+    httpcore/httpx name it ReadTimeout; the message says "read operation timed
+    out". Both have to match, because which one arrives depends on the layer."""
+    from app.pipeline import transient
+
+    class ReadTimeout(Exception):
+        pass
+
+    assert transient.is_transient(ReadTimeout("x"))
+    assert transient.is_transient(Exception("The read operation timed out"))
+
+
+def test_the_retry_loop_cannot_outlast_its_budget():
+    """Four attempts against a 20s timeout is 84 seconds of somebody watching
+    a spinner for an error that was never going to change."""
+    import time
+
+    from app.pipeline import transient
+
+    started = time.monotonic()
+    with pytest.raises(Exception):
+        transient.retry(_always_timing_out, attempts=8, max_seconds=0.8)
+    assert time.monotonic() - started < 3.0
+
+
+def _always_timing_out():
+    import time
+
+    time.sleep(0.3)
+    raise Exception("The read operation timed out")
 
 
 # ---------------------------------------------------------------------------

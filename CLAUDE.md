@@ -47,6 +47,39 @@ re-litigating, and open threads.
   the box and it shows as `OOMKilled=true`. Measured headroom: a ten-page
   400 DPI PDF peaks ~390 MB; four at once ~994 MB.
 
+## Supabase client (2.30.1)
+- **One shared client across every worker thread.** A stuck connection is
+  everyone's stuck connection — two unrelated endpoints timed out together on
+  2 Nov. Same family as the GOAWAY contention 2.22.0 fixed.
+- Timeouts are set explicitly (`SUPABASE_TIMEOUT`, default 15s). `create_client()`
+  with no options leaves storage3 on its own `DEFAULT_TIMEOUT` of 20s and
+  postgrest on a different one, so "how long can a call hang" had two answers,
+  neither ours.
+- **An attempt count does not bound what a person waits.** 4 attempts x 20s =
+  84s before the error arrives. `transient.retry(..., max_seconds=)` is the
+  wall-clock budget; use it on anything an interactive request waits for.
+  `is_transient()` already matches `ReadTimeout` — a retry that fires correctly
+  is what made that trace slow, not a retry that failed to fire.
+- **Write the object before the row.** `ingest_image` uploads under its own
+  uuid and creates the ticket only once there are bytes to point at; the old
+  order left one orphan row per retry attempt.
+
+## Before diagnosing another memory or slowness problem — LOOK, don't infer
+- `app/memlog.py` logs RSS + per-thread delta at every heavy stage (always on,
+  `docker logs usage-labels-api-1 2>&1 | grep "^.*mem stage="`). **The last
+  `mem ` line before a restart names the stage the kernel killed.** `/diag`
+  reports `rss_mb` / `peak_mb` against the 3 GB limit.
+- Two OOM fixes were shipped on inference from reading code, and the failure
+  came back after each. Both fixes were real; neither was demonstrably the
+  user's failure. Get the `mem ` lines from a failing run first.
+- **Measured timings** (sideways HCA distributor form, 6.8 MP): whole-page
+  barcode pass **12.4s**, grid-crop pass **12.2s**, and `_SHRINK_LADDER` adds
+  ~12s per extra rung when a pass finds nothing — so barcodes alone can reach
+  ~72s before any model is called. A gappy ticket then makes **three** vision
+  calls (primary + Sonnet + Opus). 2+ minutes is explainable, not mysterious.
+- The Debug Console shows per-step durations (`step.ms`). Use it instead of
+  asking whether something is "normal".
+
 ## Stack
 - FastAPI + vanilla JS SPA
 - Supabase (prod) / local JSON files (OFFLINE_MODE dev/test)

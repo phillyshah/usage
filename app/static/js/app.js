@@ -1778,6 +1778,10 @@ function renderDebugTrace(data) {
       `<span class="debug-step-icon" aria-hidden="true">${_traceIcon(step.status)}</span>`,
       `<span class="debug-step-label">${_esc(step.label)}</span>`,
       `<span class="debug-step-summary">${_esc(step.summary)}</span>`,
+      // How long this step took. A trace that said what happened but never
+      // how long any of it took could not answer "is two minutes normal?".
+      step.ms == null ? "" :
+        `<span class="debug-step-ms">${step.ms >= 1000 ? (step.ms / 1000).toFixed(1) + "s" : step.ms + "ms"}</span>`,
       `<span class="debug-step-chevron" aria-hidden="true">▸</span>`,
     ].join("");
 

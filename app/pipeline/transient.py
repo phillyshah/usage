@@ -48,7 +48,8 @@ def is_transient(exc: Exception) -> bool:
     return any(k in blob for k in _TRANSIENT_TEXT)
 
 
-def retry(fn, *args, attempts: int = 4, label: str = "", **kwargs):
+def retry(fn, *args, attempts: int = 4, label: str = "",
+          max_seconds: float | None = None, **kwargs):
     """Call ``fn``, retrying transient failures with exponential backoff.
 
     Raises the last exception once the attempts are spent, or immediately if
@@ -61,12 +62,27 @@ def retry(fn, *args, attempts: int = 4, label: str = "", **kwargs):
     on the floor while the batch path would have shrugged the same error off.
     Growing volume makes that contention more likely, not less, and the backoff
     is what spreads the load out instead of hammering through it.
+
+    ``max_seconds`` bounds the WALL CLOCK, which an attempt count cannot. A
+    Supabase read timeout is 20 seconds of waiting, so four attempts is 84
+    seconds of a person watching a spinner before the error they were always
+    going to get. The count protects the server; the budget protects whoever
+    is waiting. Each failure is classified the same either way — a budget that
+    is spent stops starting NEW attempts, it never turns a transient failure
+    into a different kind of error.
     """
+    started = time.monotonic()
     for attempt in range(attempts):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
-            if attempt < attempts - 1 and is_transient(e):
+            spent = time.monotonic() - started
+            out_of_time = max_seconds is not None and spent >= max_seconds
+            if out_of_time and is_transient(e):
+                log.warning("giving up%s after %.1fs (budget %.0fs, %d attempt(s)): %s",
+                            f" on {label}" if label else "", spent, max_seconds,
+                            attempt + 1, e)
+            if attempt < attempts - 1 and is_transient(e) and not out_of_time:
                 delay = 0.5 * (2 ** attempt) + random.random() * 0.3
                 log.warning("transient failure%s (attempt %d/%d), retrying in %.1fs: %s",
                             f" on {label}" if label else "", attempt + 1, attempts,
