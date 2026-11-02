@@ -16,7 +16,7 @@ Last updated: 2026-11-02.
 
 | | |
 |---|---|
-| Version in `main` | **2.31.0**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
+| Version in `main` | **2.31.1**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
@@ -139,7 +139,76 @@ have produced it is over. One read of /proc/self/statm costs microseconds.
 
 `/diag` also reports `rss_mb` / `peak_mb` against the 3 GB container limit.
 
-### HTTP/2 flow control was eating every upload (2.31.0)
+### Five theories, all wrong: the storage stall was transient (2.31.1)
+
+The A/B that was supposed to confirm it disconfirmed it:
+
+```
+http2=True:  FAIL ReadTimeout in 25.0s
+http2=False: FAIL ReadTimeout in 25.0s
+```
+
+HTTP/1.1 fails identically, so flow control is not the mechanism. That is the
+fourth wrong theory about this one failure — payload size, path MTU, a stale
+keep-alive pool, and HTTP/2 — every one of which fitted the evidence available
+at the time. The entry below is kept because the reasoning is on the record,
+but **its conclusion is false.**
+
+2.31.0 did fix it in the app: a debug trace stored its image and extracted six
+lines. 2.31.0 changed **two** things, and only one of them can be the reason:
+
+1. HTTP/2 off — disconfirmed by the A/B above.
+2. `SyncClientOptions` finally applying, which raised the storage timeout from
+   storage3's 20s default to 30s.
+
+The second is the better fit, and it reframes the whole failure. **Every
+failure landed at exactly the timeout** — 20.1s, 20.0s, 20.0s, then 25.0s twice
+in the A/B. A hang does not do that; a hang lands wherever the timeout happens
+to be *because it never completes*. Landing exactly on 20 and then exactly on
+25 is consistent with a transfer that was still going and got cut off.
+
+**And that was wrong too.** The rate log from 2.30.2 answered it:
+
+```
+storage upload ok in 2.5s: ...363KB (148 KB/s)
+storage upload ok in 1.9s: ...297KB (159 KB/s)
+```
+
+~150 KB/s is healthy. The same 293 KB that timed out five times at exactly
+20.0s now completes in under two seconds. So it was not slowness being cut off
+either — it was a real stall, and it **cleared on its own**.
+
+Five theories, all disproved by measurement: payload size, path MTU, a stale
+keep-alive pool, HTTP/2 flow control, and a slow transfer hitting the timeout.
+The honest conclusion is that the stall was **transient and on the Supabase
+side**, and nothing in this repo caused it or fixed it. It can come back.
+
+What the week did leave behind, and what to use when it does:
+
+* **Every upload logs its size, elapsed and rate** — which is what finally
+  ended the guessing, and did it in one line.
+* **The timeouts actually apply now** (they never did before 2.31.0). This
+  still matters at 150 KB/s: a 2.2 MB stored photo takes ~15s, which was
+  uncomfortably close to storage3's 20s default and is comfortable at 30s.
+* **Bounded retries** (`max_seconds`) and no nested loops, so a stall costs
+  seconds rather than ~100.
+* **A named error** instead of "Internal Server Error".
+* **`scripts/diagnose_storage.py`** — does Storage answer a small request,
+  where is the size cliff, is a 293 KB POST slow to every host or only to
+  Supabase. One run partitions it instead of one guess.
+
+`scripts/diagnose_storage.py` partitions the remaining possibilities in one
+run — does Storage answer a small request, where is the size cliff, and is a
+293 KB POST slow to every host or only to Supabase.
+
+**Not caused by the model work.** Andy asked, reasonably, since it coincided.
+2.27/2.28 touched `config.py`, `modelnames.py`, `run.py`, `vision.py`,
+`app.js`, `version.py` — never `db.py` or `storage.py`, which nothing touched
+until 2.30.1. `requirements.txt` has not changed since 2.21.0, so the pip layer
+stayed cached and no dependency drifted. And the box was running **2.26.1**
+when the failures began, so the weekend code was not deployed yet.
+
+### HTTP/2 flow control was eating every upload (2.31.0) — CONCLUSION DISPROVED, see above
 
 Three probe uploads of 293 KB, on a freshly restarted container:
 

@@ -5,9 +5,24 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.31.0"
+VERSION = "2.31.1"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.31.1",
+        "date": "2026-11-02",
+        "notes": [
+            "Saving images works again. Being straight about why: it is not "
+            "clear that anything here fixed it. Five explanations were tried "
+            "and measurement disproved all of them — the saves now run at "
+            "about 150 KB/s, which is healthy, so whatever was stalling them "
+            "appears to have been on Supabase's side and to have passed",
+            "What did change for good: saves are logged with their speed, "
+            "give up in seconds instead of a minute and a half, and say what "
+            "went wrong in words. A diagnostic script is included for the "
+            "next time",
+        ],
+    },
     {
         "version": "2.31.0",
         "date": "2026-11-02",
