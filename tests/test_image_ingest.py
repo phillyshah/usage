@@ -24,6 +24,8 @@ from app.db import db
 from app.main import app
 from app.pipeline.run import ingest_image
 
+from app.pipeline import transient
+
 client = TestClient(app)
 
 
@@ -242,3 +244,70 @@ def test_explain_db_error_messages():
     msg = main._explain_db_error(generic)
     assert "could not process the request" in msg.lower()
     assert "something unexpected exploded" in msg
+
+
+# ---------------------------------------------------------------------------
+# Nested retry loops — the bug the memory logs caught
+#
+# 2.30.1 gave the upload its own retry loop and left the caller's in place.
+# StorageUnavailable's message ends "(ReadTimeout)", the classifier matches on
+# text as well as type, so the outer loop called it transient and re-ran the
+# WHOLE ingest four more times, three uploads apiece. Twelve uploads and ~100
+# seconds for one failure, and the production log showed exactly four
+# `ingest.start` lines for a single 290 KB file.
+# ---------------------------------------------------------------------------
+def test_a_storage_failure_is_not_retried_a_second_time():
+    """The upload has already done its retrying. An outer loop starting over
+    is not more robust, it is the same failure four times."""
+    from app.pipeline import transient
+
+    exc = run.StorageUnavailable("... did not respond in time; try again. (ReadTimeout)")
+    assert transient.is_transient(exc) is False
+
+
+def test_a_genuine_timeout_is_still_worth_retrying():
+    """The veto must be narrow: the thing StorageUnavailable WRAPS is exactly
+    what the inner loop should keep retrying."""
+    from app.pipeline import transient
+
+    assert transient.is_transient(Exception("The read operation timed out"))
+
+
+def test_an_exception_can_declare_itself_final():
+    """The general mechanism, so the next layer that wraps a retried failure
+    has a way to say so instead of re-discovering this."""
+    from app.pipeline import transient
+
+    class Final(Exception):
+        retryable = False
+
+    assert transient.is_transient(Final("connection reset")) is False
+
+
+def test_one_failed_upload_is_one_pass_through_ingest():
+    """End to end: the caller's loop must not multiply the inner one."""
+    starts = []
+    real_decode = run.preprocess.decode_image
+
+    def counting_decode(*a, **k):
+        starts.append(1)
+        return real_decode(*a, **k)
+
+    batch = db.create_batch()
+    with patch.object(run.preprocess, "decode_image", side_effect=counting_decode), \
+         patch.object(run.preprocess, "encode_image", return_value=b"jpegbytes"), \
+         patch.object(run, "put_object", side_effect=Exception("read operation timed out")):
+        with pytest.raises(run.StorageUnavailable):
+            transient.retry(ingest_image, _jpeg_bytes(), "MO-nested.jpg",
+                            batch["id"], attempts=4)
+
+    assert len(starts) == 1, f"ingest ran {len(starts)} times; the inner loop already retried"
+
+
+def test_storage_gets_a_longer_timeout_than_a_query():
+    """An upload moves megabytes and a query moves kilobytes. Giving both one
+    number can only ever cut off a slow-but-working upload."""
+    from app.config import Settings
+
+    cfg = Settings(_env_file=None)
+    assert cfg.supabase_storage_timeout > cfg.supabase_timeout

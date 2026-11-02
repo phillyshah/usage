@@ -13,10 +13,14 @@ changed.
 """
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 
 from app.config import settings
 from app.db import db
+
+log = logging.getLogger("usage.storage")
 
 TICKET_IMAGES = "redacted-images"   # bucket id is historical; see above
 OUTPUT_SHEETS = "output-sheets"
@@ -54,11 +58,27 @@ class _SupabaseStorage:
         # storage3 2.x copies the `upsert` option straight into the `x-upsert`
         # HTTP header, so it must be the STRING "true" (httpx rejects a bool
         # header value with a TypeError). Upsert overwrites if the object exists.
-        self.client.storage.from_(bucket).upload(
-            path,
-            data,
-            {"content-type": content_type, "upsert": "true"},
-        )
+        #
+        # Timed and sized on every call, success or failure. "The upload timed
+        # out" is not a fact anyone can act on; "290 KB did not complete in 30
+        # seconds" says the connection is hanging rather than slow, and that is
+        # a different problem with a different fix.
+        started = time.monotonic()
+        try:
+            self.client.storage.from_(bucket).upload(
+                path,
+                data,
+                {"content-type": content_type, "upsert": "true"},
+            )
+        except Exception as e:
+            log.warning("storage upload FAILED after %.1fs: %s/%s %.0fKB (%s: %s)",
+                        time.monotonic() - started, bucket, path,
+                        len(data) / 1024, type(e).__name__, e)
+            raise
+        elapsed = time.monotonic() - started
+        rate = (len(data) / 1024) / elapsed if elapsed > 0 else 0
+        log.info("storage upload ok in %.1fs: %s/%s %.0fKB (%.0f KB/s)",
+                 elapsed, bucket, path, len(data) / 1024, rate)
         return f"{bucket}/{path}"
 
     def get(self, bucket: str, path: str) -> bytes:

@@ -37,7 +37,18 @@ def is_transient(exc: Exception) -> bool:
     Chiefly the HTTP/2 GOAWAY / ConnectionTerminated the shared Supabase client
     throws when several tickets are processed at once, plus the usual transient
     network and overload errors from the vision API.
+
+    An exception may veto this by setting ``retryable = False``, and that is
+    checked FIRST. The classifier matches on text as well as type, so an error
+    raised *after* its own retry loop gave up gets retried again by whatever
+    loop is outside it — a `StorageUnavailable` whose message ends "(ReadTimeout)"
+    matched "timeout" and was re-run four more times, each of which re-ran a
+    three-attempt inner loop. Twelve uploads and ~100 seconds for one failure.
+    Nesting retry loops is easy to do by accident; this is how a layer says it
+    has already done the trying.
     """
+    if getattr(exc, "retryable", None) is False:
+        return False
     names = {type(exc).__name__}
     for ctx in (exc.__cause__, exc.__context__):
         if ctx is not None:
