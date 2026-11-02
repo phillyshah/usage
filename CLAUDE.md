@@ -47,6 +47,21 @@ re-litigating, and open threads.
   the box and it shows as `OOMKilled=true`. Measured headroom: a ten-page
   400 DPI PDF peaks ~390 MB; four at once ~994 MB.
 
+## Supabase client (2.31.0)
+- **HTTP/2 is OFF** (`SUPABASE_HTTP2`, default false), and that is load-bearing.
+  storage3 builds its httpx client with `http2=True`; HTTP/2 opens with a
+  65,535-byte flow-control window, so a POST body over 64 KB stalls waiting for
+  a WINDOW_UPDATE that never came — three 293 KB probes failed at exactly 20.0s
+  each on a fresh container while postgrest queries (all under 64 KB) worked.
+  Every ticket image is over 64 KB.
+- **It must be `SyncClientOptions`, not `ClientOptions`** — different classes,
+  only the sync one has `storage`. Passing the wrong one raises, and a silent
+  fallback leaves HTTP/2 ON. Assert the settings reach the client
+  (`opts.httpx_client._transport._pool._http2`), never just that the setting
+  exists; that is the check that would have caught a day of this.
+- `requirements.txt` does not pin `supabase`. Transport defaults can therefore
+  change under a rebuild without a commit.
+
 ## Supabase client (2.30.1)
 - **One shared client across every worker thread.** A stuck connection is
   everyone's stuck connection — two unrelated endpoints timed out together on

@@ -5,9 +5,25 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.30.2"
+VERSION = "2.31.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.31.0",
+        "date": "2026-11-02",
+        "notes": [
+            "Images should save again. The connection to Supabase was using "
+            "HTTP/2, which only lets a sender send 64 KB before the far end "
+            "has to say 'carry on' — and that reply was never coming, so "
+            "every upload over 64 KB sat waiting until it gave up. Every "
+            "ticket image is over 64 KB; every database query is under it, "
+            "which is why reading worked while saving didn't",
+            "The connection settings shipped yesterday never actually "
+            "applied — the wrong options object was used, the error was "
+            "logged as a harmless note, and the app quietly kept the "
+            "library's own settings. That note now says what it costs",
+        ],
+    },
     {
         "version": "2.30.2",
         "date": "2026-11-02",

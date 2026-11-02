@@ -311,3 +311,69 @@ def test_storage_gets_a_longer_timeout_than_a_query():
 
     cfg = Settings(_env_file=None)
     assert cfg.supabase_storage_timeout > cfg.supabase_timeout
+
+
+# ---------------------------------------------------------------------------
+# The Supabase transport
+#
+# Three probe uploads of 293 KB failed at exactly 20.0s each on a freshly
+# restarted container, while postgrest queries went through throughout.
+# storage3 builds its httpx client with http2=True, and HTTP/2 opens with a
+# 65,535-byte flow-control window: a body larger than that stalls after the
+# first 64 KB waiting for a WINDOW_UPDATE and httpx waits out the read timeout.
+# "Exactly the timeout, every time" is what waiting looks like.
+# ---------------------------------------------------------------------------
+def test_http2_is_off_for_supabase_by_default():
+    """Anything over 64 KB is every ticket image we store."""
+    from app.config import Settings
+
+    assert Settings(_env_file=None).supabase_http2 is False
+
+
+def test_the_transport_settings_actually_reach_the_client():
+    """The 2.30.1 version of this used ClientOptions where SyncClientOptions
+    was required — different classes, only the sync one has `storage` — so it
+    raised, fell back, and the timeouts never applied in production. A test
+    that only checked the setting would not have noticed."""
+    import httpx
+    from supabase.lib.client_options import SyncClientOptions
+
+    built = {}
+
+    def fake_create_client(url, key, options=None):
+        built["options"] = options
+        return "client"
+
+    from app.db import _SupabaseBackend
+
+    assert _SupabaseBackend._build_client(fake_create_client) == "client"
+    opts = built["options"]
+    assert isinstance(opts, SyncClientOptions)
+    assert isinstance(opts.httpx_client, httpx.Client)
+    # The thing that matters, read off the transport the uploads will use.
+    assert opts.httpx_client._transport._pool._http2 is False
+
+
+def test_a_transport_failure_says_what_it_costs():
+    """The old handler said "using the library defaults" without saying which
+    defaults or what they mean — so a silent fallback to HTTP/2 read as a
+    harmless note for a day."""
+    import logging
+
+    from app.db import _SupabaseBackend
+
+    def exploding_create_client(url, key, options=None):
+        if options is not None:
+            raise TypeError("nope")
+        return "fallback"
+
+    logger = logging.getLogger("db")
+    records = []
+    handler = logging.Handler()
+    handler.emit = lambda r: records.append(r.getMessage())
+    logger.addHandler(handler)
+    try:
+        assert _SupabaseBackend._build_client(exploding_create_client) == "fallback"
+    finally:
+        logger.removeHandler(handler)
+    assert any("HTTP/2 is ON" in m for m in records), records

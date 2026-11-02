@@ -16,14 +16,14 @@ Last updated: 2026-11-02.
 
 | | |
 |---|---|
-| Version in `main` | **2.30.2**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
+| Version in `main` | **2.31.0**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 529 passed, 2 skipped |
+| Tests | 532 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -138,6 +138,53 @@ could turn tracing on first — by the time you want the data, the run that woul
 have produced it is over. One read of /proc/self/statm costs microseconds.
 
 `/diag` also reports `rss_mb` / `peak_mb` against the 3 GB container limit.
+
+### HTTP/2 flow control was eating every upload (2.31.0)
+
+Three probe uploads of 293 KB, on a freshly restarted container:
+
+```
+storage upload FAILED after 20.1s: redacted-images/probe-0.jpg 293KB (ReadTimeout)
+storage upload FAILED after 20.0s: redacted-images/probe-1.jpg 293KB (ReadTimeout)
+storage upload FAILED after 20.0s: redacted-images/probe-2.jpg 293KB (ReadTimeout)
+```
+
+**Exactly the timeout, every time** — that is what waiting looks like, as
+opposed to failing. And reproducible on demand, which every earlier theory
+was not.
+
+`storage3` constructs its httpx client with **`http2=True`**. HTTP/2 opens a
+stream with a 65,535-byte flow-control window: a POST body larger than that
+stalls after the first 64 KB until the peer sends a WINDOW_UPDATE. That update
+was not arriving, so httpx sat until the read timeout.
+
+Every fact fits, including the ones that killed the earlier theories:
+
+| | |
+|---|---|
+| 293 KB fails, 2.2 MB fails | anything over 64 KB; size beyond that is irrelevant |
+| fails at exactly 20.0s | waiting, not erroring |
+| fails on the FIRST call after a restart | not a stale pooled connection |
+| postgrest queries succeed all day | they are under 64 KB |
+| `curl` answered in 0.17s | rejected at auth — the body was never sent |
+| MTU clean (1472 DF), RTT 1.6 ms | the network is healthy |
+
+The app now supplies its own `httpx.Client` with `http2=False` and explicit
+connect/read/write timeouts. `SUPABASE_HTTP2=true` puts it back, because the
+A/B is one call either way and this should not need a code change to test.
+
+**And the reason this took a day longer than it should have:** 2.30.1 passed
+`ClientOptions` where `SyncClientOptions` was required. They are different
+classes and only the sync one carries the `storage` field, so it raised,
+`except Exception` swallowed it, and the handler logged
+
+    could not set Supabase client timeouts (...); using the library defaults
+
+which reads like a harmless note. It was not. It meant none of the transport
+settings applied in production — and crucially, that the fallback left HTTP/2
+**on**. The handler now says that out loud, and a test asserts the settings
+reach the client rather than asserting the setting exists, which is the check
+that would have caught it.
 
 ### Nested retry loops, and what the memory log actually showed (2.30.2)
 

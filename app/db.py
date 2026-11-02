@@ -221,21 +221,65 @@ class _SupabaseBackend:
         # Both endpoints timed out together on 2 Nov; this client is a single
         # shared instance across every worker thread, so one stuck connection
         # is everyone's stuck connection.
-        try:
-            from supabase.lib.client_options import ClientOptions
+        self.client = self._build_client(create_client)
 
-            options = ClientOptions(
+    @staticmethod
+    def _build_client(create_client):
+        """The Supabase client, with OUR transport settings rather than theirs.
+
+        Two things the library decides for you and neither is right here:
+
+        * **HTTP/2.** storage3 constructs its httpx client with `http2=True`,
+          and HTTP/2 opens with a 65,535-byte flow-control window. A POST body
+          larger than that stalls after the first 64 KB waiting for a
+          WINDOW_UPDATE, and httpx waits until the read timeout — a 293 KB
+          upload failed at exactly 20.1s on a freshly restarted container while
+          postgrest queries, all comfortably under 64 KB, went through
+          throughout. Supplying our own client is the only way to turn it off.
+        * **Timeouts.** `create_client()` with no options leaves storage3 on its
+          own 20s default and postgrest on a different one.
+
+        It must be `SyncClientOptions`, not `ClientOptions` — they are different
+        classes and only the sync one carries the `storage` field, so passing
+        the wrong one raised "'ClientOptions' object has no attribute 'storage'"
+        and silently fell back to the library defaults. Which is to say: the
+        timeout change shipped in 2.30.1 never took effect in production, and
+        the warning in the log is how that was found.
+        """
+        try:
+            import httpx
+            from supabase.lib.client_options import SyncClientOptions
+
+            http_client = httpx.Client(
+                http2=settings.supabase_http2,
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=float(settings.supabase_storage_timeout),
+                    write=float(settings.supabase_storage_timeout),
+                    pool=10.0,
+                ),
+            )
+            options = SyncClientOptions(
                 postgrest_client_timeout=settings.supabase_timeout,
                 storage_client_timeout=settings.supabase_storage_timeout,
+                httpx_client=http_client,
             )
-            self.client = create_client(settings.supabase_url,
-                                        settings.supabase_service_key,
-                                        options=options)
+            client = create_client(settings.supabase_url,
+                                   settings.supabase_service_key,
+                                   options=options)
+            log.info("Supabase client: http2=%s, storage timeout=%ss",
+                     settings.supabase_http2, settings.supabase_storage_timeout)
+            return client
         except Exception as e:   # pragma: no cover - older/newer supabase-py
-            log.warning("could not set Supabase client timeouts (%s); using "
-                        "the library defaults", e)
-            self.client = create_client(settings.supabase_url,
-                                        settings.supabase_service_key)
+            # Loud, and it names the setting that did not apply. The previous
+            # version of this handler said "using the library defaults" without
+            # saying which defaults or what that cost.
+            log.error("could not configure the Supabase client (%s: %s) — "
+                      "falling back to the library defaults, which means "
+                      "HTTP/2 is ON and large uploads may hang",
+                      type(e).__name__, e)
+            return create_client(settings.supabase_url,
+                                 settings.supabase_service_key)
 
     def insert(self, table: str, row: dict) -> dict:
         res = self.client.table(table).insert(row).execute()
