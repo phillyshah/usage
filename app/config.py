@@ -84,6 +84,15 @@ class Settings(BaseSettings):
     # the 2 Nov failures: a 290 KB upload timing out needs 20 KB/s to have
     # succeeded, so those were hanging, not slow.)
     supabase_storage_timeout: int = 30
+    # HTTP/1.1 for Supabase, deliberately. storage3 builds its httpx client
+    # with http2=True, and HTTP/2's default initial flow-control window is
+    # 65,535 bytes: a POST body bigger than that stalls after the first 64 KB
+    # waiting for a WINDOW_UPDATE, and the client waits until the read timeout.
+    # A 293 KB upload failed at exactly 20.1s on a freshly restarted container
+    # while postgrest queries — all well under 64 KB — succeeded throughout.
+    #
+    # Set SUPABASE_HTTP2=true to put it back; the A/B is one call either way.
+    supabase_http2: bool = False
     # The wall clock a single storage write may spend, retries included. Below
     # one timeout would mean never retrying at all.
     storage_retry_seconds: float = 25.0
