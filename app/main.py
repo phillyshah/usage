@@ -213,17 +213,20 @@ async def upload_images(files: list[UploadFile] = File(...)):
 
         try:
             if pdf.is_pdf(data):
-                pages = pdf.pdf_to_page_images(data)
-                if not pages:
-                    raise ValueError("Could not read this PDF (it may be empty or corrupt).")
+                # Streamed, one page at a time. Holding every page of a 400 DPI
+                # render is what took the server down: each page is ingested and
+                # dropped before the next is rendered.
                 stem = (filename or "ticket").rsplit(".", 1)[0]
                 out = []
-                for n, page_bytes in enumerate(pages, start=1):
+                for n, page_bytes in enumerate(pdf.iter_page_images(data), start=1):
                     page_name = f"{stem}-p{n}"
                     r = transient.retry(ingest_image, page_bytes, page_name,
                                         batch["id"], label=page_name)
                     out.append({"ticket_id": r["ticket_id"], "status": r["status"],
                                 "filename": page_name})
+                    del page_bytes
+                if not out:
+                    raise ValueError("Could not read this PDF (it may be empty or corrupt).")
                 return out
             r = transient.retry(ingest_image, data, filename, batch["id"],
                                 label=filename or "upload")
@@ -895,8 +898,11 @@ async def debug_trace(file: UploadFile = File(...)):
         # silently ignored.
         page_data, page_name, extra = data, filename, None
         if pdf.is_pdf(data):
-            pages = pdf.pdf_to_page_images(data)
-            if not pages:
+            # Page 1 only. This rendered the whole document to use the first
+            # page of it, paying for up to forty-nine pages it then threw away.
+            total = pdf.page_count(data)
+            first = pdf.render_page(data, 0)
+            if not first:
                 return {
                     "ticket_id": None, "filename": filename, "status": "error",
                     "steps": [],
@@ -904,9 +910,9 @@ async def debug_trace(file: UploadFile = File(...)):
                                         "empty or corrupt."},
                 }
             stem = (filename or "ticket").rsplit(".", 1)[0]
-            page_data, page_name = pages[0], f"{stem}-p1"
-            if len(pages) > 1:
-                extra = (f"This PDF has {len(pages)} pages. The console traces "
+            page_data, page_name = first, f"{stem}-p1"
+            if total > 1:
+                extra = (f"This PDF has {total} pages. The console traces "
                          f"one ticket, so this is page 1 — upload the file in "
                          f"step 1 to process every page.")
 

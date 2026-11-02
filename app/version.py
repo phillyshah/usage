@@ -5,9 +5,29 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.28.0"
+VERSION = "2.29.0"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.29.0",
+        "date": "2026-11-02",
+        "notes": [
+            "Fixed the 'Bad Gateway' on upload. The server was running out of "
+            "memory and being killed, so whatever request was in flight came "
+            "back as a gateway error — usually an upload that had nothing to "
+            "do with the cause",
+            "A PDF page is now rendered once, on its own, and at a sensible "
+            "size. Some scanner apps declare a page of 23x30 inches for an "
+            "ordinary letter-size ticket, and rendering that at full "
+            "resolution took over a gigabyte for a single page. A normal page "
+            "is unchanged, so barcodes read exactly as well as before",
+            "Pages are also handled one at a time instead of all at once. A "
+            "ten-page PDF used nearly 1.9 GB and now uses under 0.4 GB; four "
+            "uploaded together used to be enough to take the server down",
+            "The Debug Console no longer renders every page of a PDF just to "
+            "look at page 1",
+        ],
+    },
     {
         "version": "2.28.0",
         "date": "2026-10-31",

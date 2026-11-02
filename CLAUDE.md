@@ -16,6 +16,28 @@ re-litigating, and open threads.
   says nothing about whether the API will accept the request — see the 2.20.0
   entry in `docs/WORK_LOG.md`.
 
+## Memory (2.29.0 — read before touching PDF rendering)
+- The VPS is **7.9 GB with no swap**. On 2026-11-02 the host OOM killer took
+  uvicorn out five times in twenty minutes at ~5.3 GB each, and every request in
+  flight came back as **"Bad Gateway"** — including uploads that had nothing to
+  do with the cause. An OOM kill leaves no traceback, so "the logs look fine" is
+  the signature, not a counter-argument. Check `dmesg -T | grep -i "out of
+  memory"` and `docker inspect usage-labels-api-1 --format '{{.State.ExitCode}}
+  {{.State.OOMKilled}} {{.RestartCount}}'`.
+- **`pdf.DEFAULT_DPI` is not the thing that controls memory.** `scale = dpi/72`
+  multiplies the page size the PDF *declares*, which scanner apps set as high as
+  23x30 inches. `MAX_RENDER_PIXELS` (30 MP) is the real guard; it leaves a
+  letter/A4/legal page at the full 400 DPI that 2.24.0 measured as necessary for
+  barcode decode. **Don't "fix" a memory problem by lowering the DPI** — that
+  silently costs barcodes and doesn't address a declared-size blowup anyway.
+- Render pages with `pdf.iter_page_images()` (streaming) or `pdf.render_page()`
+  (one page). `pdf_to_page_images()` holds the whole document and exists for the
+  tests. `_RENDER_LOCK` keeps it to one render at a time because `/images`
+  ingests four uploads in parallel.
+- `docker-compose.yml` sets `mem_limit: 3g`, so the container dies instead of
+  the box and it shows as `OOMKilled=true`. Measured headroom: a ten-page
+  400 DPI PDF peaks ~390 MB; four at once ~994 MB.
+
 ## Stack
 - FastAPI + vanilla JS SPA
 - Supabase (prod) / local JSON files (OFFLINE_MODE dev/test)
