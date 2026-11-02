@@ -78,6 +78,12 @@ class Settings(BaseSettings):
     # DEFAULT_TIMEOUT of 20s, and a hung upload retried four times is 84
     # seconds of somebody watching a spinner before the error arrives.
     supabase_timeout: int = 15
+    # Storage gets its own, longer. A query moves kilobytes; an upload moves
+    # megabytes, and giving both the same number was my mistake in 2.30.1 — it
+    # can only ever cut off a slow-but-working upload. (It was not the cause of
+    # the 2 Nov failures: a 290 KB upload timing out needs 20 KB/s to have
+    # succeeded, so those were hanging, not slow.)
+    supabase_storage_timeout: int = 30
     # The wall clock a single storage write may spend, retries included. Below
     # one timeout would mean never retrying at all.
     storage_retry_seconds: float = 25.0

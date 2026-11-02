@@ -16,14 +16,14 @@ Last updated: 2026-11-02.
 
 | | |
 |---|---|
-| Version in `main` | **2.30.1**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
+| Version in `main` | **2.30.2**. (2.27.0 was merged and reversed the same day.) **Deployed on the VPS was still 2.26.1 as of 2 Nov** — 2.27.0-2.29.0 land on the next pull |
 | Deployed | **2.19.0** — and every extraction under it was rejected; see the 2.20.0 entry |
 | `EXTRACT_PATIENT_INITIALS` | **true** in the VPS `.env`. As of 2.19.0 this decides whether the two letters are KEPT, not whether they are read |
 | Reader | `VISION_PROVIDER` — **`openrouter` from 2.25.0**. Second readers: **Sonnet then Opus from 2.28.0**, for tickets left with an empty Price/Surgeon/Hospital/Date |
 | Model | Family names from 2.28.0: `sonnet` / `opus` resolve to the newest release at run time. **The VPS `.env` pins `ANTHROPIC_MODEL=claude-sonnet-5-5` and wins**, so it stays pinned until that line is changed to `sonnet` |
 | Effort | `high` extraction (5.5 recalibrated the levels; `medium` was tuned against Sonnet 5). The separate initials call is gone (2.19.0) |
 | Schema | current through `db/11`. **`db/12_price_learning.sql` is NOT applied yet** — needed by 2.16.0 |
-| Tests | 524 passed, 2 skipped |
+| Tests | 529 passed, 2 skipped |
 | Learning stores | 2,410 facts, intact through the 2.12.0 migration |
 
 PRs this cycle, all merged: #33 (2.9.0), #34 (2.10.0), #35 (2.11.0),
@@ -138,6 +138,57 @@ could turn tracing on first — by the time you want the data, the run that woul
 have produced it is over. One read of /proc/self/statm costs microseconds.
 
 `/diag` also reports `rss_mb` / `peak_mb` against the 3 GB container limit.
+
+### Nested retry loops, and what the memory log actually showed (2.30.2)
+
+The instrumentation from 2.30.0 earned its place on the first failing run:
+
+```
+mem stage=ingest.start   rss=177MB  file=mo19282-a_1024.jpg bytes=290301
+mem stage=ingest.decoded rss=184MB  px=1MP
+mem stage=ingest.start   rss=184MB  file=mo19282-a_1024.jpg bytes=290301
+mem stage=ingest.decoded rss=189MB  px=1MP
+... x4, and `ingest.stored` never appears
+```
+
+Three facts, none of them inferred:
+
+1. **RSS peaks at 212 MB.** Not memory. Three OOM fixes went in and the box is
+   nowhere near its 3 GB ceiling on this workload.
+2. **The file is 290 KB and decodes to 1 MP.** A 290 KB upload failing needs
+   20 KB/s to have succeeded, so the connection is **hanging, not slow** —
+   payload size and the storage timeout are both ruled out as causes.
+3. **`ingest.start` appears four times for one file.** That is a bug I shipped
+   in 2.30.1.
+
+**The nested retry.** 2.30.1 gave the upload its own retry loop and left the
+caller's `transient.retry(ingest_image, ...)` in place. `StorageUnavailable`'s
+message ends "(ReadTimeout)", `is_transient()` matches on TEXT as well as type,
+so the outer loop classified an already-given-up failure as worth retrying and
+re-ran the whole ingest four more times, three uploads apiece — twelve uploads
+and ~100 seconds for one failure.
+
+An exception can now veto with `retryable = False`, checked before anything
+else. The general mechanism matters more than this instance: the text
+classifier will do this to any layer that wraps a retried failure, and the next
+person to add an inner retry loop needs a way to say "already tried" that does
+not depend on wording.
+
+**Storage got its own timeout** (30s) rather than sharing postgrest's 15s. An
+upload moves megabytes, a query moves kilobytes. Sharing one number was my
+mistake in 2.30.1 and could only ever cut off a working upload — it was not the
+cause here, by fact 2 above.
+
+**Every upload is now timed and sized in the log**, success or failure, so
+"it timed out" becomes "290 KB did not complete in 30s" — which distinguishes a
+hanging connection from a slow one, and those have different fixes.
+
+**Still unexplained: why a 290 KB PUT to Supabase Storage hangs at all** while
+postgrest queries on the same host succeed throughout. Leading candidates, in
+order, none confirmed: a broken path MTU (small requests pass, a body that
+needs to be fragmented stalls); IPv6 egress that resolves but does not carry;
+Supabase Storage itself. A plain `curl` upload from the VPS separates our code
+from the network and is the next step.
 
 ### The 2+ minute trace was the storage write, not the reading (2.30.1)
 

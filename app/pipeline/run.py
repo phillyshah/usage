@@ -38,6 +38,12 @@ class StorageUnavailable(RuntimeError):
     the same reasoning as the 503 in 2.20.0.
     """
 
+    # Raised only after the upload's OWN retry loop has given up, so an outer
+    # loop must not start over. Without this the message — which ends
+    # "(ReadTimeout)" — matched the text classifier and the whole ingest ran
+    # four more times, three uploads apiece.
+    retryable = False
+
 
 class VisionUnavailable(RuntimeError):
     """The AI reader could not be reached, so the batch did not start.

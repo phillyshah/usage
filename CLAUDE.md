@@ -60,6 +60,15 @@ re-litigating, and open threads.
   wall-clock budget; use it on anything an interactive request waits for.
   `is_transient()` already matches `ReadTimeout` — a retry that fires correctly
   is what made that trace slow, not a retry that failed to fire.
+- **Never nest retry loops (2.30.2).** `is_transient()` matches on TEXT as well
+  as type, so an exception raised *after* its own retry loop gave up gets
+  retried again by whatever loop is outside it — `StorageUnavailable` ends
+  "(ReadTimeout)" and was re-run 4x3 times. An exception vetoes with
+  `retryable = False`, checked first. Use it on anything that wraps a
+  already-retried failure.
+- Storage has its own timeout (`SUPABASE_STORAGE_TIMEOUT`, 30s) — an upload
+  moves megabytes, a query kilobytes. Every upload is logged with size and
+  elapsed, so a failure says hanging vs slow.
 - **Write the object before the row.** `ingest_image` uploads under its own
   uuid and creates the ticket only once there are bytes to point at; the old
   order left one orphan row per retry attempt.

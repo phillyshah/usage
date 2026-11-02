@@ -5,9 +5,24 @@ chronological order (newest first). The /version API and the UI "What's New"
 panel both read from here.
 """
 
-VERSION = "2.30.1"
+VERSION = "2.30.2"
 
 CHANGELOG: list[dict] = [
+    {
+        "version": "2.30.2",
+        "date": "2026-11-02",
+        "notes": [
+            "A failed image save is no longer retried twice over. The save "
+            "already retries on its own, and the step above it was starting "
+            "the whole thing again — four times, three saves each, for one "
+            "failure. That is most of the wait before the error appeared",
+            "Saving an image now gets a longer time limit than a database "
+            "query does; they were sharing one, which only ever cut short a "
+            "save that was working",
+            "Every save is logged with its size and how long it took, so a "
+            "failure says whether the connection was slow or simply hanging",
+        ],
+    },
     {
         "version": "2.30.1",
         "date": "2026-11-02",

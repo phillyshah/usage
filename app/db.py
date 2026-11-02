@@ -226,7 +226,7 @@ class _SupabaseBackend:
 
             options = ClientOptions(
                 postgrest_client_timeout=settings.supabase_timeout,
-                storage_client_timeout=settings.supabase_timeout,
+                storage_client_timeout=settings.supabase_storage_timeout,
             )
             self.client = create_client(settings.supabase_url,
                                         settings.supabase_service_key,
